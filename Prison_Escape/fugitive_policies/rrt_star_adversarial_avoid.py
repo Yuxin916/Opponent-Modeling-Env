@@ -28,7 +28,7 @@ class RRTStarAdversarialAvoid(RRTStarAdversarial):
 
         super().__init__(env, n_iter, step_len, search_radius, max_speed, terrain_cost_coef, visualize, gamma, goal_sample_rate)
         self.epsilon = epsilon
-        self.DEBUG = False
+        self.DEBUG = True
         self.MIN_DIST_TO_HIDEOUT = 50
         self.mountain_travel = "optimal"
         self.reset()

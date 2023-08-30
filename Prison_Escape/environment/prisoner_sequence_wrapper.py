@@ -7,7 +7,7 @@ import numpy as np
 import copy
 import gc
 
-from simulator import PrisonerEnv
+from Prison_Escape.environment import PrisonerEnv
 
 class PrisonerSequenceEnv(gym.Wrapper):
     """ Batches the observations for an lstm """

@@ -143,7 +143,14 @@ class RRTStarAdversarial:
             dist_bools = dists < MOUNTAIN_OUTER_RANGE
 
             delta = a - vertices
+
+            # if np.linalg.norm(delta, axis=1)[:, None].all() > 1e-8:
+            #     unit_vectors = delta / np.linalg.norm(delta, axis=1)[:, None]
+            # else:
+            #     unit_vectors = np.array([0.0, 0.0])
+
             unit_vectors = delta / np.linalg.norm(delta, axis=1)[:, None]
+
             d = np.cross(c - a, unit_vectors)
 
             radius_bools = np.logical_and((-MOUNTAIN_OUTER_RANGE < d), (d < MOUNTAIN_OUTER_RANGE))

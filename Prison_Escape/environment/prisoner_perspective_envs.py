@@ -4,6 +4,11 @@ from Prison_Escape.fugitive_policies.rrt_star_adversarial_avoid import RRTStarAd
 import numpy as np
 import gym
 
+"""
+PrisonerBlueEnv and PrisonerEnv are essentially wrappers for the PrisonerBothEnv class such that 
+given the policy of the other team, we just return the observations for the desired team (red or blue).
+"""
+
 class PrisonerEnv(gym.Wrapper):
     """ Produce environment to match our previous implementation to hot swap in
     

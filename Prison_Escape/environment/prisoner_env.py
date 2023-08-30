@@ -1,40 +1,42 @@
-import copy
 import math
 from types import SimpleNamespace
 
+import copy
 import gc
+import math
 import os
+import random
+from dataclasses import dataclass
+from enum import Enum, auto
+from types import SimpleNamespace
+
 import cv2
 import gym
 import matplotlib.pyplot as plt
 import numpy as np
-import random
 import torch
-import copy
-
 from PIL import Image
-from dataclasses import dataclass
 from gym import spaces
 from tqdm import tqdm
-from enum import Enum, auto
-from numpy import genfromtxt
 
-from Prison_Escape.environment.forest_coverage.generate_square_map import generate_square_map
-from Prison_Escape.environment.forest_coverage.autoencoder import ConvAutoencoder
 from Prison_Escape.environment.abstract_object import AbstractObject, DetectionObject
 from Prison_Escape.environment.camera import Camera
+from Prison_Escape.environment.forest_coverage.autoencoder import ConvAutoencoder
+from Prison_Escape.environment.forest_coverage.autoencoder import produce_terrain_embedding
+from Prison_Escape.environment.forest_coverage.generate_square_map import generate_square_map
 from Prison_Escape.environment.fugitive import Fugitive
 from Prison_Escape.environment.helicopter import Helicopter
 from Prison_Escape.environment.hideout import Hideout
+from Prison_Escape.environment.observation_spaces import create_observation_space_ground_truth, \
+    create_observation_space_fugitive, \
+    create_observation_space_blue_team, create_observation_space_prediction
+from Prison_Escape.environment.observation_spaces import transform_blue_detection_of_fugitive
 from Prison_Escape.environment.search_party import SearchParty
 from Prison_Escape.environment.terrain import Terrain
 from Prison_Escape.environment.utils import create_camera_net
-# from blue_policies.blue_heuristic import BlueHeuristic
 
-from Prison_Escape.environment.observation_spaces import create_observation_space_ground_truth, create_observation_space_fugitive, \
-    create_observation_space_blue_team, create_observation_space_prediction
-from Prison_Escape.environment.observation_spaces import transform_blue_detection_of_fugitive
-from Prison_Escape.environment.forest_coverage.autoencoder import produce_terrain_embedding
+
+# from blue_policies.blue_heuristic import BlueHeuristic
 
 
 class ObservationType(Enum):
@@ -90,7 +92,7 @@ class PrisonerBothEnv(gym.Env):
         - Detection of the fugitive from [cameras, helicopters, helicopter dropped cameras, search parties]
         - Fugitive's detection of [helicopters, helicopter dropped cameras, search parties]
 
-    Observation space (fugitive)
+    Observation space (evader)
         - Time
         - Locations of [known cameras, hideouts]
         - Self location, speed, heading
@@ -98,8 +100,9 @@ class PrisonerBothEnv(gym.Env):
 
     Action space
         - 2 dimensional: speed [1,15] x direction [-pi, pi]
+        - 2 dimensional: speed [1,15] x direction [-pi, pi]
 
-    Observation space (good guys')
+    Observation space (pursuer team)
         - Time
         - Locations of [cameras, helicopters, helicopter dropped cameras, search parties, known hideouts]
         - Detection of the fugitive from [cameras, helicopters, helicopter dropped cameras, search parties]
@@ -134,7 +137,9 @@ class PrisonerBothEnv(gym.Env):
             - 1 helicopter
             - 5 known hideouts
             - 5 unknown hideouts
-            - 5 known cameras, 5 unknown cameras, with another 5 known cameras on known hideouts (to encode the fact that we can always detect the fugitive when he/she goes to known hideouts)
+            - 5 known cameras, 5 unknown cameras,
+            - with another 5 known cameras on known hideouts
+            (to encode the fact that we can always detect the fugitive when evader goes to known hideouts)
     """
 
     def __init__(self,
@@ -165,7 +170,7 @@ class PrisonerBothEnv(gym.Env):
                  camera_net_path=None,
                  mountain_locations=[(400, 300), (1600, 1800)],
                  camera_range_factor=1,
-                 camera_file_path="simulator/camera_locations/original.txt",
+                 camera_file_path="/home/tsaisplus/MuRPE_base/Opponent-Modeling-Env/Prison_Escape/environment/camera_locations/original.txt",
                  observation_step_type="Fugitive",  # Fugitive, Blue, GroundTruth
                  observation_terrain_feature=True,
                  include_camera_at_start=False,
@@ -174,9 +179,9 @@ class PrisonerBothEnv(gym.Env):
                  step_reset=True,
                  debug=False,
                  store_last_k_fugitive_detections=False,
-                 detection_factor = 4.0,
-                 search_party_speed = 6.5,
-                 helicopter_speed = 127,
+                 detection_factor=4.0,
+                 search_party_speed=6.5,
+                 helicopter_speed=127,
                  ):
         """
         PrisonerEnv simulates the prisoner behavior in a grid world.
@@ -284,7 +289,7 @@ class PrisonerBothEnv(gym.Env):
         if observation_terrain_feature:
             # we save these to add to the observations
             model = ConvAutoencoder()
-            model.load_state_dict(torch.load('forest_coverage/autoencoder_state_dict.pt'))
+            model.load_state_dict(torch.load('Prison_Escape/environment/forest_coverage/autoencoder_state_dict.pt'))
             self._cached_terrain_embeddings = [produce_terrain_embedding(model, terrain_np) for terrain_np in
                                                forest_density_list]
             terrain_embedding_size = self._cached_terrain_embeddings[0].shape[0]
@@ -298,15 +303,15 @@ class PrisonerBothEnv(gym.Env):
         self.prisoner = Fugitive(self.terrain, [2400, 2400])  # the actual spawning will happen in set_up_world
 
         # Read in the cameras from file
-        if random_cameras: 
+        if random_cameras:
             self.num_random_unknown_cameras = num_random_unknown_cameras
-            self.num_random_known_cameras = num_random_known_cameras 
+            self.num_random_known_cameras = num_random_known_cameras
         else:
             self.camera_file_path = camera_file_path
             self.known_camera_locations, self.unknown_camera_locations = self.read_camera_file(camera_file_path)
 
         self.include_camera_at_start = include_camera_at_start
-        
+
         self.dim_x = self.terrain.dim_x
         self.dim_y = self.terrain.dim_y
 
@@ -337,12 +342,11 @@ class PrisonerBothEnv(gym.Env):
         self.camera_net_path = camera_net_path
         self.include_start_location_blue_obs = include_start_location_blue_obs
         self.min_distance_from_hideout_to_start = min_distance_from_hideout_to_start
-        
+
         self.detection_factor = detection_factor
         DetectionObject.detection_factor = detection_factor
         self.search_party_speed = search_party_speed
         self.helicopter_speed = helicopter_speed
-
 
         self.max_timesteps = max_timesteps  # 72 hours = 4320 minutes
 
@@ -367,33 +371,36 @@ class PrisonerBothEnv(gym.Env):
         self.set_up_world()
 
         self.blue_observation_space, self.blue_obs_names = create_observation_space_blue_team(
-                                        num_known_cameras=self.num_known_cameras, 
-                                        num_unknown_cameras=self.num_unknown_cameras, 
-                                        num_known_hideouts=self.num_known_hideouts,
-                                        num_helicopters=self.num_helicopters, 
-                                        num_search_parties=self.num_search_parties,
-                                        terrain_size=terrain_embedding_size,
-                                        include_start_location_blue_obs=include_start_location_blue_obs)
-        self.fugitive_observation_space, self.fugitive_obs_names = create_observation_space_fugitive(num_known_cameras=self.num_known_cameras, 
-                                        num_known_hideouts=self.num_known_hideouts, 
-                                        num_unknown_hideouts=self.num_unknown_hideouts, 
-                                        num_helicopters=self.num_helicopters, 
-                                        num_search_parties=self.num_search_parties,
-                                        terrain_size=terrain_embedding_size)
+            num_known_cameras=self.num_known_cameras,
+            num_unknown_cameras=self.num_unknown_cameras,
+            num_known_hideouts=self.num_known_hideouts,
+            num_helicopters=self.num_helicopters,
+            num_search_parties=self.num_search_parties,
+            terrain_size=terrain_embedding_size,
+            include_start_location_blue_obs=include_start_location_blue_obs)
+        self.fugitive_observation_space, self.fugitive_obs_names = create_observation_space_fugitive(
+            num_known_cameras=self.num_known_cameras,
+            num_known_hideouts=self.num_known_hideouts,
+            num_unknown_hideouts=self.num_unknown_hideouts,
+            num_helicopters=self.num_helicopters,
+            num_search_parties=self.num_search_parties,
+            terrain_size=terrain_embedding_size)
 
-        self.gt_observation_space, self.gt_obs_names = create_observation_space_ground_truth(num_known_cameras=self.num_known_cameras, 
-                                        num_unknown_cameras=self.num_unknown_cameras, 
-                                        num_known_hideouts=self.num_known_hideouts, 
-                                        num_unknown_hideouts=self.num_unknown_hideouts,
-                                        num_helicopters=self.num_helicopters, 
-                                        num_search_parties=self.num_search_parties,
-                                        terrain_size=terrain_embedding_size)
+        self.gt_observation_space, self.gt_obs_names = create_observation_space_ground_truth(
+            num_known_cameras=self.num_known_cameras,
+            num_unknown_cameras=self.num_unknown_cameras,
+            num_known_hideouts=self.num_known_hideouts,
+            num_unknown_hideouts=self.num_unknown_hideouts,
+            num_helicopters=self.num_helicopters,
+            num_search_parties=self.num_search_parties,
+            terrain_size=terrain_embedding_size)
 
-        self.prediction_observation_space, self.prediction_obs_names = create_observation_space_prediction(num_known_cameras=self.num_known_cameras,
-                                        num_known_hideouts=self.num_known_hideouts,
-                                        num_helicopters=self.num_helicopters,
-                                        num_search_parties=self.num_search_parties,
-                                        terrain_size=terrain_embedding_size)
+        self.prediction_observation_space, self.prediction_obs_names = create_observation_space_prediction(
+            num_known_cameras=self.num_known_cameras,
+            num_known_hideouts=self.num_known_hideouts,
+            num_helicopters=self.num_helicopters,
+            num_search_parties=self.num_search_parties,
+            terrain_size=terrain_embedding_size)
 
         self.prisoner_location_history = [self.prisoner.location.copy()]
 
@@ -415,9 +422,11 @@ class PrisonerBothEnv(gym.Env):
         self.town_pic_cv = cv2.imread("Prison_Escape/environment/assets/town.png", cv2.IMREAD_UNCHANGED)
         self.search_party_pic_cv = cv2.imread("Prison_Escape/environment/assets/searching.png", cv2.IMREAD_UNCHANGED)
         self.helicopter_pic_cv = cv2.imread("Prison_Escape/environment/assets/helicopter.png", cv2.IMREAD_UNCHANGED)
-        self.helicopter_no_pic_cv = cv2.imread("Prison_Escape/environment/assets/helicopter_no.png", cv2.IMREAD_UNCHANGED)
+        self.helicopter_no_pic_cv = cv2.imread("Prison_Escape/environment/assets/helicopter_no.png",
+                                               cv2.IMREAD_UNCHANGED)
         self.prisoner_pic_cv = cv2.imread("Prison_Escape/environment/assets/prisoner.png", cv2.IMREAD_UNCHANGED)
-        self.detected_prisoner_pic_cv = cv2.imread("Prison_Escape/environment/assets/detected_prisoner.png", cv2.IMREAD_UNCHANGED)
+        self.detected_prisoner_pic_cv = cv2.imread("Prison_Escape/environment/assets/detected_prisoner.png",
+                                                   cv2.IMREAD_UNCHANGED)
 
         self.default_asset_size = 52
         # Store (t,x,y) for last k detections. Only updated if store_last_k_fugitive_detections is True
@@ -464,7 +473,8 @@ class PrisonerBothEnv(gym.Env):
         for known_hid in range(self.num_known_hideouts):
             if known_hid == 0:
                 location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
-                while np.linalg.norm(np.array([location[0], location[1]]) - self.prisoner.location) < self.min_distance_from_hideout_to_start:
+                while np.linalg.norm(np.array(
+                        [location[0], location[1]]) - self.prisoner.location) < self.min_distance_from_hideout_to_start:
                     location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
                 if self.DEBUG:
                     print('prisoner location: ', self.prisoner.location)
@@ -489,12 +499,13 @@ class PrisonerBothEnv(gym.Env):
                 self.hideout_list.append(Hideout(self.terrain, location=location, known_to_good_guys=True))
 
         for unknown_hid in range(self.num_unknown_hideouts):
-            if len(self.hideout_list) >=1:
+            if len(self.hideout_list) >= 1:
                 # make sure hideout is far from each other and far from start location
                 location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
                 s = [tuple(i.location) for i in self.hideout_list]
                 dists = np.array([math.sqrt((location[0] - s0) ** 2 + (location[1] - s1) ** 2) for s0, s1 in s])
-                while np.linalg.norm(np.array([location[0], location[1]]) - self.prisoner.location) <= self.min_distance_from_hideout_to_start\
+                while np.linalg.norm(np.array(
+                        [location[0], location[1]]) - self.prisoner.location) <= self.min_distance_from_hideout_to_start \
                         or (dists < self.min_distance_between_hideouts).any():
                     location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
                     s = [tuple(i.location) for i in self.hideout_list]
@@ -502,7 +513,8 @@ class PrisonerBothEnv(gym.Env):
                     if self.DEBUG:
                         print('prisoner location: ', self.prisoner.location)
                         print('hideout location: ', location)
-                        print('distance: ', np.linalg.norm(np.array([location[0], location[1]]) - self.prisoner.location))
+                        print('distance: ',
+                              np.linalg.norm(np.array([location[0], location[1]]) - self.prisoner.location))
                 self.hideout_list.append(Hideout(self.terrain, location=location, known_to_good_guys=False))
             else:
                 location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
@@ -512,8 +524,10 @@ class PrisonerBothEnv(gym.Env):
         # specify hideouts' locations. These are passed in from the input args
         # We select a number of hideouts from num_known_hideouts and num_unknown_hideouts
 
-        assert self.num_known_hideouts <= len(self.known_hideout_locations), f"Must provide a list of known_hideout_locations ({len(self.known_hideout_locations)}) greater than number of known hideouts {self.num_known_hideouts}"
-        assert self.num_unknown_hideouts <= len(self.unknown_hideout_locations), f"Must provide a list of known_hideout_locations ({len(self.unknown_hideout_locations)}) greater than number of known hideouts {self.num_unknown_hideouts}"
+        assert self.num_known_hideouts <= len(
+            self.known_hideout_locations), f"Must provide a list of known_hideout_locations ({len(self.known_hideout_locations)}) greater than number of known hideouts {self.num_known_hideouts}"
+        assert self.num_unknown_hideouts <= len(
+            self.unknown_hideout_locations), f"Must provide a list of known_hideout_locations ({len(self.unknown_hideout_locations)}) greater than number of known hideouts {self.num_unknown_hideouts}"
 
         known_hideouts = random.sample(self.known_hideout_locations, self.num_known_hideouts)
         unknown_hideouts = random.sample(self.unknown_hideout_locations, self.num_unknown_hideouts)
@@ -562,7 +576,8 @@ class PrisonerBothEnv(gym.Env):
                 # We do not want to place the fugitive on a mountain!
                 prisoner_location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
                 # We do not want to place the fugitive within a distance of the mountain!
-                m_dists = np.array([np.linalg.norm(np.array(prisoner_location) - np.array([m[1], m[0]])) for m in self.terrain.mountain_locations])
+                m_dists = np.array([np.linalg.norm(np.array(prisoner_location) - np.array([m[1], m[0]])) for m in
+                                    self.terrain.mountain_locations])
                 near_mountain = min(m_dists)
         elif self.spawn_mode == 'uniform_hideout_dist':
             # Spawn uniformly on the map but with a distance of at least min_distance_from_hideout_to_start
@@ -572,11 +587,13 @@ class PrisonerBothEnv(gym.Env):
             while near_mountain < mountain_range or min_dist < self.min_distance_from_hideout_to_start:
                 prisoner_location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
                 s = [tuple(i.location) for i in self.hideout_list]
-                dists = np.array([math.sqrt((prisoner_location[0] - s0) ** 2 + (prisoner_location[1] - s1) ** 2) for s0, s1 in s])
+                dists = np.array(
+                    [math.sqrt((prisoner_location[0] - s0) ** 2 + (prisoner_location[1] - s1) ** 2) for s0, s1 in s])
                 min_dist = min(dists)
-                
+
                 # We do not want to place the fugitive within a distance of the mountain!
-                m_dists = np.array([np.linalg.norm(np.array(prisoner_location) - np.array([m[1], m[0]])) for m in self.terrain.mountain_locations])
+                m_dists = np.array([np.linalg.norm(np.array(prisoner_location) - np.array([m[1], m[0]])) for m in
+                                    self.terrain.mountain_locations])
                 near_mountain = min(m_dists)
         elif self.spawn_mode == 'hideout':
             in_mountain = True
@@ -594,24 +611,28 @@ class PrisonerBothEnv(gym.Env):
                          prisoner_location[1] in range(0, self.dim_y)
         elif self.spawn_mode == 'corner':
             # generate the fugitive randomly near the top right corner
-            prisoner_location = AbstractObject.generate_random_locations_with_range([self.dim_x-self.spawn_range, self.dim_x],                                                                                    [self.dim_y-self.spawn_range, self.dim_y])
+            prisoner_location = AbstractObject.generate_random_locations_with_range(
+                [self.dim_x - self.spawn_range, self.dim_x], [self.dim_y - self.spawn_range, self.dim_y])
         else:
             raise ValueError('Unknown spawn mode "%s"' % self.spawn_mode)
         self.prisoner = Fugitive(self.terrain, prisoner_location)
         self.prisoner_start_location = prisoner_location
 
         # specify cameras' initial locations
-        if(self.random_cameras):
+        if (self.random_cameras):
             # randomized 
-            known_camera_locations = [AbstractObject.generate_random_locations(self.dim_x, self.dim_y) for _ in range(self.num_random_known_cameras)]
-            unknown_camera_locations = [AbstractObject.generate_random_locations(self.dim_x, self.dim_y) for _ in range(self.num_random_unknown_cameras)]
+            known_camera_locations = [AbstractObject.generate_random_locations(self.dim_x, self.dim_y) for _ in
+                                      range(self.num_random_known_cameras)]
+            unknown_camera_locations = [AbstractObject.generate_random_locations(self.dim_x, self.dim_y) for _ in
+                                        range(self.num_random_unknown_cameras)]
         else:
             known_camera_locations = self.known_camera_locations[:]
             unknown_camera_locations = copy.deepcopy(self.unknown_camera_locations)
-        
+
         if self.camera_net_bool:
             if self.camera_net_path is None:
-                cam_locs = create_camera_net(prisoner_location, dist_x=360, dist_y=360, spacing=30, include_camera_at_start=self.include_camera_at_start)
+                cam_locs = create_camera_net(prisoner_location, dist_x=360, dist_y=360, spacing=30,
+                                             include_camera_at_start=self.include_camera_at_start)
                 unknown_camera_locations.extend(cam_locs.tolist())
             else:
                 known_net, unknown_net = self.read_camera_file(self.camera_net_path)
@@ -659,7 +680,8 @@ class PrisonerBothEnv(gym.Env):
         for counter in range(self.num_search_parties):
             search_party_location = search_party_initial_locations[
                 counter]  # AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
-            self.search_parties_list.append(SearchParty(self.terrain, search_party_location, speed=self.search_party_speed))  # speed=4
+            self.search_parties_list.append(
+                SearchParty(self.terrain, search_party_location, speed=self.search_party_speed))  # speed=4
 
         # Currently not modeling town
         # # generate town lists
@@ -832,7 +854,9 @@ class PrisonerBothEnv(gym.Env):
 
         parties_detection_of_fugitive_one_hot = transform_blue_detection_of_fugitive(parties_detection_of_fugitive)
 
-        self._blue_observation = self._construct_blue_observation(parties_detection_of_fugitive_one_hot, self._terrain_embedding, self.include_start_location_blue_obs)
+        self._blue_observation = self._construct_blue_observation(parties_detection_of_fugitive_one_hot,
+                                                                  self._terrain_embedding,
+                                                                  self.include_start_location_blue_obs)
 
         # calculate reward
         self.is_detected = self.is_fugitive_detected(parties_detection_of_fugitive)
@@ -1054,7 +1078,8 @@ class PrisonerBothEnv(gym.Env):
         observation = np.concatenate((observation, terrain))
         return observation
 
-    def _construct_blue_observation(self, parties_detection_of_fugitive, terrain, include_start_location_blue_obs=False):
+    def _construct_blue_observation(self, parties_detection_of_fugitive, terrain,
+                                    include_start_location_blue_obs=False):
         """
         Construct observation feature map from current states. For more info about the two parameters, check `self.step()`
         :param parties_detection_of_fugitive: a list encoding parties detection of the fugitive
@@ -1079,7 +1104,7 @@ class PrisonerBothEnv(gym.Env):
         observation.extend(parties_detection_of_fugitive)
 
         if include_start_location_blue_obs:
-            observation.append(self.prisoner_start_location[0]/ self.dim_x)
+            observation.append(self.prisoner_start_location[0] / self.dim_x)
             observation.append(self.prisoner_start_location[1] / self.dim_y)
 
         observation = np.array(observation)
@@ -1139,17 +1164,18 @@ class PrisonerBothEnv(gym.Env):
                                                                       parties_detection_of_fugitive,
                                                                       self._terrain_embedding)
         parties_detection_of_fugitive = transform_blue_detection_of_fugitive(parties_detection_of_fugitive)
-        self._blue_observation = self._construct_blue_observation(parties_detection_of_fugitive, self._terrain_embedding, 
-                                                                self.include_start_location_blue_obs)
+        self._blue_observation = self._construct_blue_observation(parties_detection_of_fugitive,
+                                                                  self._terrain_embedding,
+                                                                  self.include_start_location_blue_obs)
 
         assert self._blue_observation.shape == self.blue_observation_space.shape, "Wrong observation shape %s, %s" % (
-        self._blue_observation.shape, self.blue_observation_space.shape)
+            self._blue_observation.shape, self.blue_observation_space.shape)
         assert self._ground_truth_observation.shape == self.gt_observation_space.shape, "Wrong observation shape %s, %s" % (
-        self._ground_truth_observation.shape, self.gt_observation_space.shape)
+            self._ground_truth_observation.shape, self.gt_observation_space.shape)
         assert self._fugitive_observation.shape == self.fugitive_observation_space.shape, "Wrong observation shape %s, %s" % (
-        self._fugitive_observation.shape, self.fugitive_observation_space.shape)
+            self._fugitive_observation.shape, self.fugitive_observation_space.shape)
         assert self._prediction_observation.shape == self.prediction_observation_space.shape, "Wrong observation shape %s, %s" % (
-        self._fugitive_observation.shape, self.fugitive_observation_space.shape)
+            self._fugitive_observation.shape, self.fugitive_observation_space.shape)
 
         # # construct observation
         # if self.observation_type == ObservationType.Fugitive:
