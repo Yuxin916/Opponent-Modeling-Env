@@ -1,0 +1,4 @@
+# Ignore all __pychache__ folders inside all subfolders
+*.pyc
+__pycache__/
+.idea/
