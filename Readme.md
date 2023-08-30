@@ -8,11 +8,13 @@
 
 We present two large scale adversarial tracking environments: Prison Escape and Narco Traffic Interdiction as discussed in the paper. This repository contains the code to run the environments and collect the datasets. The codebase for training models is located [here](https://github.com/CORE-Robotics-Lab/GrAMMI). 
 
-### Installation
+### Installation (Done)
 After cloning the repository, please use the provided conda environment (`environment.yml`) file to install dependencies:
 `conda env create -f environment.yml`
 
 This will create an environment named 'tracking_env'. Please edit the first line of `environment.yml` to name it something else.
+
+`conda activate tracking_env`
 
 ## 1.Prison Escape
 ### About the Environment
