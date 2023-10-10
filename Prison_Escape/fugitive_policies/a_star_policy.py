@@ -3,19 +3,23 @@ import numpy as np
 from .utils import clip_theta, distance, c_str
 import matplotlib.pyplot as plt
 import time
-from fugitive_policies.custom_queue import QueueFIFO
+from Prison_Escape.fugitive_policies.custom_queue import QueueFIFO
 
-DIM_X = 2428
-DIM_Y = 2428
+raw_env_path = "Prison_Escape/environment/configs/mytest.yaml"
+import yaml
+with open(raw_env_path, 'r') as stream:
+    data = yaml.safe_load(stream)
+DIM_X = data['terrain_x']
+DIM_Y = data['terrain_y']
 
 MOUNTAIN_OUTER_RANGE = 150
 MOUNTAIN_INNER_RANGE = 155
 import math
 
 import skimage.measure
-from fugitive_policies.base_policy import Observation
-from fugitive_policies.a_star.gridmap import OccupancyGridMap
-from fugitive_policies.a_star.a_star import a_star
+from Prison_Escape.fugitive_policies.base_policy import Observation
+from Prison_Escape.fugitive_policies.a_star.gridmap import OccupancyGridMap
+from Prison_Escape.fugitive_policies.a_star.a_star import a_star
 import copy
 
 class AStarPolicy:

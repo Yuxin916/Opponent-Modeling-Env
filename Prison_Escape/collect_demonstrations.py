@@ -8,14 +8,13 @@ from tqdm import tqdm
 from Prison_Escape.environment.gnn_wrapper import PrisonerGNNEnv
 
 from Prison_Escape.environment.load_environment import load_environment
-from Prison_Escape.environment.prisoner_perspective_envs import PrisonerEnv
-from Prison_Escape.environment import PrisonerBothEnv, PrisonerBlueEnv, PrisonerEnv
+from Prison_Escape.environment import PrisonerBothEnv, PrisonerBlueEnv
 from blue_policies.heuristic import BlueHeuristic
 from fugitive_policies.heuristic import HeuristicPolicy
 from fugitive_policies.rrt_star_adversarial_avoid import RRTStarAdversarialAvoid
 from fugitive_policies.a_star_avoid import AStarAdversarialAvoid
 
-from Prison_Escape.environment import initialize_prisoner_environment
+# from Prison_Escape.environment import initialize_prisoner_environment
 import argparse
 import random
 
@@ -169,7 +168,7 @@ if __name__ == "__main__":
     folder_name = "train"  # train, val or test
 
     # Adjust the detection range in the config file below to obtain different datasets as described in the paper
-    env_path = "Prison_Escape/environment/configs/balance_game.yaml"
+    env_path = "Prison_Escape/environment/configs/mytest.yaml"
 
     heuristic_type = "AStar"
     random_cameras = False

@@ -5,6 +5,8 @@ import colorsys
 from enum import Enum
 from matplotlib.path import Path
 
+debug = True
+
 class TerrainType(Enum):
     MOUNTAIN = 0
     DENSE_FOREST = 1
@@ -14,19 +16,19 @@ class TerrainType(Enum):
 
 class Terrain:
     def __init__(self,
-                 dim_x=2428,
-                 dim_y=2428,
-                #  num_mountains=2,
-                 percent_mountain=.08,
-                 percent_dense=.30,
-                 forest_color_scale = 6, 
-                 forest_density_array = None,
-                 mountain_locations = [(400, 300), (1600, 1800)]):
+                 dim_x,
+                 dim_y,
+                 percent_mountain,
+                 percent_dense,
+                 forest_color_scale,
+                 forest_density_array,
+                 mountain_locations
+                 ):
         """
         Terrain instance will contain information about the terrain size and the terrain_type for each grid.
         :param dim_x: the maximum coordinate on x
         :param dim_y: the maximum coordinate on y
-        :param percent_mountain: The amount of area each mountain should assume (in comparison to total map area)
+        :param percent_mountain: The amount of area each mountain should assume (in comparison to total map area).
         :param percent_dense: The amount of area dense forest should assume (in comparison to total map area)
         :param forest_color_scale: Scale for how the forest color is determined, does not affect actual forest density
         :param mountain_locations: List of (x, y) coordinates for mountain centers
@@ -34,13 +36,17 @@ class Terrain:
         self.num_mountains = len(mountain_locations)
         self.dim_x = dim_x
         self.dim_y = dim_y
+        assert percent_dense == 0.0, "Currently only support wood, no dense forest"
         self.percent_dense = percent_dense
+        assert percent_mountain == 0.0, "Currently only support no mountains"
         self.percent_mountain = percent_mountain
+        forest_color_scale = 6
         self.forest_color_scale = forest_color_scale
         self.forest_density_array = forest_density_array
 
         # compute area of different terrain objects
         self.size_of_mountain = int(self.dim_x * self.percent_mountain)
+        assert self.size_of_mountain == 0, "Currently only support no mountains"
 
         # mountains, dense, shallow
         self.obj_to_dim = {'mountains': 0, 'forest': 1}
@@ -55,13 +61,14 @@ class Terrain:
             y_mountains = [loc[1] for loc in mountain_locations]
             self.place_mountains(x_mountains=x_mountains, y_mountains=y_mountains)
         self.place_forests()
-        # self.visualize()
 
     def place_forests(self):
         """ Based on TL coverage data, place forests on the grid"""
         assert self.forest_density_array.shape == (self.dim_x, self.dim_y)
         forest_dimension = self.obj_to_dim['forest']
         self.world_representation[forest_dimension, :, :] = self.forest_density_array
+        # TODO: why the self.world_representation includes 2 array, one is mountain, one is forest,
+        #  and mountain is all 0s in 2428x2428, forest is all 1s in 2428x2428?
         
 
     def place_mountains(self, x_mountains=None, y_mountains=None):
@@ -93,7 +100,7 @@ class Terrain:
                 y = np.random.randint(self.dim_y)
 
             # append (y, x) to keep consistent with defaults that we had before
-            # However, we're passing in (x, y) with (0,0) in the bottom left and (2428, 2428) in the top right
+            # However, we're passing in (x, y) with (0,0) in the bottom left and (dim_x, dim_y) in the top right
             mountain_locations.append((y, x))
 
         self.mountain_locations = mountain_locations
@@ -135,7 +142,7 @@ class Terrain:
         # construct a Path from the vertices
         pth = Path(xycrop, closed=False)
 
-        # test which pixels fall within the path
+        # test.txt which pixels fall within the path
         mask = pth.contains_points(xypix)
 
         # reshape to the same size as the image
@@ -177,7 +184,7 @@ class Terrain:
         # construct a Path from the vertices
         pth = Path(xycrop, closed=False)
 
-        # test which pixels fall within the path
+        # test.txt which pixels fall within the path
         mask2 = pth.contains_points(xypix)
 
         # reshape to the same size as the image
@@ -238,13 +245,27 @@ class Terrain:
 
         # Place forest on the image
         r, g, b = color_func(self.world_representation[1])
-        display_matrix = np.zeros((self.dim_x, self.dim_y, 3))
-        display_matrix[:, :, 0] = r
-        display_matrix[:, :, 1] = g
-        display_matrix[:, :, 2] = b
+        display_matrix = np.ones((self.dim_x, self.dim_y, 3)) * 255  # Initialize with white background
+
+        # Set forest colors (where visibility ratio is not 1)
+        forest_pixels = self.world_representation[1] != 1  # Pixels with visibility ratio not equal to 1
+        display_matrix[forest_pixels, 0] = r[forest_pixels]  # Red channel
+        display_matrix[forest_pixels, 1] = g[forest_pixels]  # Green channel
+        display_matrix[forest_pixels, 2] = b[forest_pixels]  # Blue channel
+
+        # display_matrix = np.zeros((self.dim_x, self.dim_y, 3))
+        # display_matrix[:, :, 0] = r
+        # display_matrix[:, :, 1] = g
+        # display_matrix[:, :, 2] = b
 
         # mountains
         display_matrix[self.world_representation[0, :, :] == 1, :3] = 211 / 255, 211 / 255, 211 / 255
+
+        # # Create grid lines manually
+        # for x in range(self.dim_x):
+        #     for y in range(self.dim_y):
+        #         if x % 10 == 0 or y % 10 == 0:  # TODO: Every 10 pixels as one grid line. Should not do it on Terrain pic level.
+        #             display_matrix[x, y] = [0, 0, 0]
 
         # imshow coordinate system is different from Cartesian system. See `prisoner_env.py` for more.
         display_matrix = np.transpose(display_matrix, [1, 0, 2])
@@ -285,11 +306,13 @@ class Terrain:
         :param location: a list of length 2. For example, [5, 7]
         :return: the terrain_type of the given location according to the terrain.
         """
-        location = np.clip(location, 0, 2427)
+        location = np.clip(location, 0, DIM_X-1)
         if self.world_representation[0, location[0], location[1]] == 1:
-            return TerrainType.MOUNTAIN
+            raise ValueError("Location is in a mountain")
+            # return TerrainType.MOUNTAIN
         elif self.world_representation[1, location[0], location[1]] == 1:
-            return TerrainType.DENSE_FOREST
+            raise ValueError("Location is in a dense forest")
+            # return TerrainType.DENSE_FOREST
         elif self.world_representation[2, location[0], location[1]] == 1:
             return TerrainType.WOODS
         else:
@@ -304,5 +327,35 @@ class Terrain:
         return self.world_representation[0, location[0], location[1]] == 1
 
 if __name__ == "__main__":
-    # test code
-    terrain = Terrain()
+    # test.txt code
+    raw_env_path = "/home/tsaisplus/MuRPE_base/Opponent-Modeling-Env/Prison_Escape/environment/configs/mytest.yaml"
+    import yaml
+
+    with open(raw_env_path, 'r') as stream:
+        data = yaml.safe_load(stream)
+    DIM_X = data['terrain_x']
+    DIM_Y = data['terrain_y']
+
+    forest_color_scale = 1
+
+    percent_dense = data['percent_dense']
+    size_of_dense_forest = int(DIM_X * percent_dense)
+
+    percent_mountain = 0
+
+    from Prison_Escape.environment.forest_coverage.generate_square_map import generate_square_map
+    forest_density_array = generate_square_map(size_of_dense_forest=size_of_dense_forest, dim_x=DIM_X,
+                                               dim_y=DIM_Y)
+
+    # mountain_locations = [(400, 300), ]
+    mountain_locations = []
+
+    terrain = Terrain(
+        dim_x=DIM_X, dim_y=DIM_Y, percent_mountain=percent_mountain, percent_dense=percent_dense,
+        forest_color_scale=forest_color_scale,
+        forest_density_array=forest_density_array,
+        mountain_locations=mountain_locations)
+
+    if debug:
+        terrain.visualize()
+    print('stop')

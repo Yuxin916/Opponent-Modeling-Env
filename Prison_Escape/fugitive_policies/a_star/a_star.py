@@ -1,6 +1,6 @@
 import math
 from heapq import heappush, heappop
-from fugitive_policies.a_star.utils import dist2d
+from Prison_Escape.fugitive_policies.a_star.utils import dist2d
 import random
 
 def _get_movements_4n():

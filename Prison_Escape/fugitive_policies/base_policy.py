@@ -5,8 +5,12 @@ import matplotlib.pyplot as plt
 import time
 from Prison_Escape.fugitive_policies.custom_queue import QueueFIFO
 
-DIM_X = 2428
-DIM_Y = 2428
+raw_env_path = "/home/tsaisplus/MuRPE_base/Opponent-Modeling-Env/Prison_Escape/environment/configs/mytest.yaml"
+import yaml
+with open(raw_env_path, 'r') as stream:
+    data = yaml.safe_load(stream)
+DIM_X = data['terrain_x']
+DIM_Y = data['terrain_y']
 
 MOUNTAIN_OUTER_RANGE = 150
 MOUNTAIN_INNER_RANGE = 140
@@ -108,6 +112,8 @@ class Observation:
         return False
 
     def in_range_of_mountain(self, location, mount_distance=MOUNTAIN_OUTER_RANGE):
+        if self.terrain.mountain_locations is None:
+            return None, None
         for mountain_location in self.terrain.mountain_locations:
             mountain_location_corrected = (mountain_location[1], mountain_location[0])
             # need distance from edge of mountain to center, 120?

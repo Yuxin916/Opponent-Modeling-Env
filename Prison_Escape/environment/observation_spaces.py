@@ -151,7 +151,9 @@ def create_observation_space_fugitive(num_known_cameras, num_known_hideouts, num
     obs_names.add_name('prisoner_loc', 2)
     obs_names.add_name('prev_action', 2)
     # 4. detection of [helicopters, helicopter dropped cameras (currently not implemented), search parties]
-    # Detection is encoded by a three tuple [b, x, y] where b in binary. If b=1 (detected), [x, y] will have the detected location in world coordinates. If b=0 (not detected), [x, y] will be [-1, -1].
+    # Detection is encoded by a three tuple [b, x, y] where b in binary.
+    # If b=1 (detected), [x, y] will have the detected location in world coordinates.
+    # If b=0 (not detected), [x, y] will be [-1, -1].
     for i in range(num_helicopters):
         observation_low.extend([0, -1, -1])
         observation_high.extend([1, 1, 1])
@@ -169,6 +171,11 @@ def create_observation_space_fugitive(num_known_cameras, num_known_hideouts, num
     observation_low = np.array(observation_low, dtype=np.float)
 
     observation_space = spaces.Box(observation_low, observation_high)
+
+    # print the shape of the observation space
+    # print("Evader Observation Space SHAPE: ", observation_space.shape)
+    # print the type of the observation space, discrete or continuous
+    # print("Evader Observation Space TYPE: ", observation_space.dtype)
     return observation_space, obs_names
 
 def create_observation_space_prediction(num_known_cameras, num_known_hideouts, num_helicopters, num_search_parties, terrain_size):
@@ -241,11 +248,13 @@ def create_observation_space_blue_team(num_known_cameras, num_unknown_cameras, n
             observation_low.extend([0, 0])
             observation_high.extend([1, 1])
             obs_names.add_name('unknown_camera_loc_%d'%i, 2)
+
         # 2.2 [x,y] are locations of known hideouts (divided by 2428 to normalize)
         for i in range(num_known_hideouts):
             observation_low.extend([0, 0])
             observation_high.extend([1, 1])
             obs_names.add_name('hideout_loc_%d'%i, 2)
+
         # 3. helicopter and search party locations, we're not including detection here
         for i in range(num_helicopters):
             observation_low.extend([0, 0])
@@ -292,7 +301,32 @@ def create_observation_space_blue_team(num_known_cameras, num_unknown_cameras, n
         observation_high = np.array(observation_high, dtype=np.float)
         observation_low = np.array(observation_low, dtype=np.float)
         observation_space = spaces.Box(observation_low, observation_high)
+
+        # print the shape of the observation space
+        # print("Pursuer Team Observation Space SHAPE: ", observation_space.shape)
+        # print the type of the observation space, discrete or continuous
+        # print("Pursuer Team Observation Space TYPE: ", observation_space.dtype)
         return observation_space, obs_names
+
+def create_action_space_blue_team(num_helicopters, num_search_parties, search_party_speed, helicopter_speed):
+    search_party_spaces = [
+        (f'search_party_{id_}', spaces.Box(
+            low=np.array([-np.pi, -np.pi, 0]),
+            high=np.array([np.pi, np.pi, search_party_speed])
+        )) for id_ in range(num_search_parties)
+    ]
+
+    # Create a list of gym spaces for helicopters
+    helicopter_spaces = [
+        (f'helicopter_{id_}', spaces.Box(
+            low=np.array([-np.pi, -np.pi, 0]),
+            high=np.array([np.pi, np.pi, helicopter_speed])
+        )) for id_ in range(num_helicopters)
+    ]
+    #TODO: make the training begin first
+    return spaces.Box(low=np.array([-np.pi, -np.pi, 0]), high=np.array([np.pi, np.pi, helicopter_speed]))
+
+    # return spaces.Dict(dict(search_party_spaces + helicopter_spaces))
 
 def transform_blue_detection_of_fugitive(parties_detection_of_fugitive):
     """ This is used to remove the repeated detections of the fugitive in the blue parties observation space.

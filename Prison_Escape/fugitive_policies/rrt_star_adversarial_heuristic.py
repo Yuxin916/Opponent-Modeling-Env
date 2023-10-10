@@ -1,18 +1,22 @@
-import numpy as np
-
-from .utils import clip_theta, distance, c_str
-import matplotlib.pyplot as plt
 import time
+import matplotlib.pyplot as plt
+import numpy as np
 from Prison_Escape.fugitive_policies.custom_queue import QueueFIFO
+from .utils import clip_theta, distance, c_str
 
-DIM_X = 2428
-DIM_Y = 2428
+raw_env_path = "/home/tsaisplus/MuRPE_base/Opponent-Modeling-Env/Prison_Escape/environment/configs/mytest.yaml"
+import yaml
+with open(raw_env_path, 'r') as stream:
+    data = yaml.safe_load(stream)
+DIM_X = data['terrain_x']
+DIM_Y = data['terrain_y']
 
 MOUNTAIN_OUTER_RANGE = 150
 MOUNTAIN_INNER_RANGE = 155
 import math
 
-from Prison_Escape.fugitive_policies.base_policy import Observation, DetectionObject, Camera, Heli, SearchParty, Hideout
+from Prison_Escape.fugitive_policies.base_policy import Observation
+
 
 class Node:
     def __init__(self, n):
@@ -33,16 +37,17 @@ class Node:
     def location(self):
         return np.array([self.x, self.y])
 
+
 class RRTStarAdversarial:
-    def __init__(self, env,             
-            n_iter=1000, 
-            step_len=150, 
-            search_radius=150, 
-            max_speed=7.5,
-            terrain_cost_coef=500, 
-            visualize=False,
-            gamma=15, 
-            goal_sample_rate=0.1):
+    def __init__(self, env,
+                 n_iter=1000,
+                 step_len=150,
+                 search_radius=150,
+                 max_speed=7.5,
+                 terrain_cost_coef=500,
+                 visualize=False,
+                 gamma=15,
+                 goal_sample_rate=0.1):
         self.env = env
         self.terrain = self.env.terrain
         self.dim_x = env.terrain.dim_x
@@ -53,14 +58,15 @@ class RRTStarAdversarial:
         self.num_known_hideouts = env.num_known_hideouts
         self.num_unknown_hideouts = env.num_unknown_hideouts
         self.max_timesteps = 4320  # 72 hours = 4320 minutes
-        self.observations = Observation(self.terrain, self.num_known_cameras, self.num_helicopters, self.num_known_hideouts, self.num_unknown_hideouts, self.num_search_parties)
+        self.observations = Observation(self.terrain, self.num_known_cameras, self.num_helicopters,
+                                        self.num_known_hideouts, self.num_unknown_hideouts, self.num_search_parties)
         self.first_run = True
 
         self.actions = []
         self.search_radius = search_radius
         self.iter_max = n_iter
         self.visualize = visualize
-        self.vertex_pos = np.ones((5000, 2)) * np.inf # Initialize more than possible just in case
+        self.vertex_pos = np.ones((5000, 2)) * np.inf  # Initialize more than possible just in case
         self.terrain_cost_coef = terrain_cost_coef
         self.neighbor_gamma = gamma
         self.max_speed = max_speed
@@ -69,7 +75,7 @@ class RRTStarAdversarial:
 
     def get_angles_away_from_object_location(self, object_location, start_location):
         theta = self.calculate_desired_heading(start_location, object_location)
-        return clip_theta(theta - np.pi/2), clip_theta(theta + np.pi/2)
+        return clip_theta(theta - np.pi / 2), clip_theta(theta + np.pi / 2)
 
     def get_closest_hideout(self, location, hideout_list):
         min_dist = np.inf
@@ -111,7 +117,7 @@ class RRTStarAdversarial:
         """
         a = np.array([start_node.x, start_node.y])
         b = np.array([end_node.x, end_node.y])
-        
+
         for mountain_location in self.terrain.mountain_locations:
             c = np.array([mountain_location[1], mountain_location[0]])
             if distance(b, c) < MOUNTAIN_OUTER_RANGE:
@@ -120,7 +126,7 @@ class RRTStarAdversarial:
             delta = a - b
             unit_vector = delta / np.linalg.norm(delta)
             d = np.cross(c - a, unit_vector)
-            if -MOUNTAIN_OUTER_RANGE < d <  MOUNTAIN_OUTER_RANGE:
+            if -MOUNTAIN_OUTER_RANGE < d < MOUNTAIN_OUTER_RANGE:
                 return True
 
             if unit_vector @ a < unit_vector @ c < unit_vector @ b:
@@ -157,15 +163,16 @@ class RRTStarAdversarial:
             # unit_vectors is of shape (num_vertices, 2)
             # vertices is of shape (num_vertices, 2)
 
-            bool_one = np.logical_and((unit_vectors @ a < unit_vectors @ c), (unit_vectors @ c < (unit_vectors * vertices).sum(axis=1)))
-            bool_two = np.logical_and(((unit_vectors*vertices).sum(axis=1) < unit_vectors @ c), (unit_vectors @ c < unit_vectors @ a))
+            bool_one = np.logical_and((unit_vectors @ a < unit_vectors @ c),
+                                      (unit_vectors @ c < (unit_vectors * vertices).sum(axis=1)))
+            bool_two = np.logical_and(((unit_vectors * vertices).sum(axis=1) < unit_vectors @ c),
+                                      (unit_vectors @ c < unit_vectors @ a))
 
             final_bool = np.logical_or.reduce((dist_bools, radius_bools, bool_one, bool_two))
             booleans.append(final_bool)
 
         booleans = np.logical_or.reduce(booleans)
         return indices[np.invert(booleans)]
-
 
     def new_state(self, node_start, node_goal):
         dist, theta = self.get_distance_and_angle(node_start, node_goal)
@@ -209,7 +216,7 @@ class RRTStarAdversarial:
 
             previous_cost = node_neighbor.cost
             dist, _ = self.get_distance_and_angle(node_new, node_neighbor)
-            new_cost = dist + self.terrain_cost_path(node_new, node_neighbor) + node_new.cost # new cost for neighbor
+            new_cost = dist + self.terrain_cost_path(node_new, node_neighbor) + node_new.cost  # new cost for neighbor
 
             if previous_cost > new_cost:
                 if self.visualize:
@@ -223,13 +230,13 @@ class RRTStarAdversarial:
                 if self.visualize:
                     self.plotter.plot_edge(node_neighbor.parent, node_neighbor, color='red')
 
-
     def search_goal_parent(self):
         dist_list = self.get_dist_list(self.s_goal)
         node_index = [i for i in range(len(dist_list)) if dist_list[i] <= self.step_len]
 
         if len(node_index) > 0:
-            cost_list = [dist_list[i] + self.vertex[i].cost + self.terrain_cost_path(self.vertex[i], self.s_goal) for i in node_index
+            cost_list = [dist_list[i] + self.vertex[i].cost + self.terrain_cost_path(self.vertex[i], self.s_goal) for i
+                         in node_index
                          if not self.check_collision_mountain(self.vertex[i], self.s_goal)]
             return node_index[int(np.argmin(cost_list))]
 
@@ -277,7 +284,7 @@ class RRTStarAdversarial:
         dist = (vector[0] ** 2 + vector[1] ** 2) ** 0.5
         if dist == 0:
             return 0
-        norm = vector/dist
+        norm = vector / dist
         num_points = int(dist // self.max_speed)
 
         # print(num_points)
@@ -285,7 +292,7 @@ class RRTStarAdversarial:
         # points = np.repeat(norm[np.newaxis, :], num_points, axis=0) # create an array of all normed points
         # range_points = self.max_speed * np.arange(num_points)[:, np.newaxis] # create an array of single range
         # range_points = np.expand_dims(np.arange(num_points), 1) * self.max_speed
-        range_points = np.linspace((0, 0), (num_points-1, num_points-1), num_points)
+        range_points = np.linspace((0, 0), (num_points - 1, num_points - 1), num_points)
         # print(range_points.shape, points.shape)
         terrain_points = range_points * points
         # terrain_points = np.einsum('ij,ik->ij', points, range_points) # 
@@ -335,12 +342,12 @@ class RRTStarAdversarial:
             node_neighbor = self.vertex[node_index]
             dist, _ = self.get_distance_and_angle(node_new, node_neighbor)
             new_cost = dist + self.terrain_cost_path(node_new, node_neighbor) + node_neighbor.cost
-            
+
             if new_cost < cost_min:
                 changed_parent = True
                 cost_min = new_cost
                 node_parent = node_neighbor
-        
+
         if changed_parent:
             node_new.change_parent(node_parent)
             # don't need to reproprogate because there should be no children node on node_new?
@@ -391,7 +398,7 @@ class RRTStarAdversarial:
                 self.vertex_pos[vertex_index] = np.array([node_new.x, node_new.y])
                 if distance(node_new.location, self.s_goal.location) < self.step_len:
                     self.goal_not_found = False
-                
+
                 vertex_index += 1
                 if len(neighbor_index) > 0:
                     start = time.time()
@@ -465,38 +472,6 @@ class RRTStarAdversarial:
             self.actions = self.convert_path_to_actions(path)
         return [self.actions.pop(0)]
 
-class RRTStarAdversarialAvoid(RRTStarAdversarial):
-    def __init__(env,             
-            n_iter=1000, 
-            step_len=150, 
-            search_radius=150, 
-            max_speed=15,
-            terrain_cost_coef=500, 
-            visualize=False,
-            gamma=15, 
-            goal_sample_rate=0.1):
-
-        super().__init__(env, n_iter, step_len, search_radius, max_speed, terrain_cost_coef, visualize, gamma, goal_sample_rate)
-    
-    def predict(self, observation, deterministic=True, plot=False):
-        self.observations.process_observation(observation)
-        if len(self.actions) == 0:
-            closest_known_hideout, closest_unknown_hideout = self.get_closest_hideouts(self.observations.location)
-            goal_location = closest_unknown_hideout.location
-            start = time.time()
-            path = self.plan(goal_location)
-            print("Planning time:", time.time() - start)
-            startpos = (self.s_start.x, self.s_start.y)
-            endpos = (self.s_goal.x, self.s_goal.y)
-            if plot:
-                plotter = Plotter(self.terrain, startpos, endpos, plot_mountains=False, live=False)
-                plotter.create_graph(self.s_start, background_img=self.env.cached_terrain_image)
-                # plotter.create_path_node(self.goal)
-                plotter.create_path(path)
-                plt.savefig('figures/path_rrt_star.png', dpi=600)
-                plt.show()
-            self.actions = self.convert_path_to_actions(path)
-        return [self.actions.pop(0)]
 
 class Plotter:
     def __init__(self, terrain, startpos, endpos, plot_mountains=True, live=True):
@@ -509,15 +484,15 @@ class Plotter:
 
     def initialize_plot(self):
         fig, self.ax = plt.subplots()
-        self.ax.set_xlim([0, 2428])
-        self.ax.set_ylim([0, 2428])
+        self.ax.set_xlim([0, DIM_X])
+        self.ax.set_ylim([0, DIM_Y])
         self.ax.set_aspect('equal')
         # self.ax.scatter(self.terrain.mountain_locations[0][1], self.terrain.mountain_locations[0][0], marker='H', color='red')
         # self.ax.scatter(self.terrain.mountain_locations[1][1], self.terrain.mountain_locations[1][0], marker='H', color='red')
         # self.ax.imshow()
         self.ax.scatter(self.startpos[0], self.startpos[1], marker='o', s=200, color='blue', zorder=3)
         self.ax.scatter(self.endpos[0], self.endpos[1], marker='X', s=200, color='blue', zorder=3)
-        
+
         if self.plot_mountains:
             for mountain_location in self.terrain.mountain_locations:
                 cir = plt.Circle((mountain_location[1], mountain_location[0]), MOUNTAIN_OUTER_RANGE, color='blue')

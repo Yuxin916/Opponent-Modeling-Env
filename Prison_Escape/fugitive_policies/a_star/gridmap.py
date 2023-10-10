@@ -1,6 +1,6 @@
 import numpy
 import matplotlib.pyplot as plt
-from fugitive_policies.a_star.utils import png_to_ogm, terrain_map_mountain_to_ogm
+from Prison_Escape.fugitive_policies.a_star.utils import png_to_ogm, terrain_map_mountain_to_ogm
 
 
 class OccupancyGridMap:

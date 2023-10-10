@@ -1,5 +1,4 @@
-from Prison_Escape.environment.abstract_object import AbstractObject, DetectionObject
-from Prison_Escape.environment.terrain import TerrainType
+from Prison_Escape.environment.abstract_object import DetectionObject
 
 
 class Camera(DetectionObject):

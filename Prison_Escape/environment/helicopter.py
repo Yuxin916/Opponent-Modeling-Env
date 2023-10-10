@@ -23,7 +23,8 @@ class Helicopter(MovingObject, DetectionObject):
     def detect(self, location_object, speed):
         """
         Determine detection of an object based on its location and type of the object
-        The helicopters' detection of the fugitive is different than the fugitive's detection of the helicopters as given in the "detection ranges.xlsx".
+        The helicopters' detection of the fugitive is different than the fugitive's detection of the helicopters
+        as given in the "detection ranges.xlsx".
         :param location_object:
         :param object_instance: the instance referred to the object the fugitive is detecting.
         :return: [b,x,y] where b is a boolean indicating detection, and [x,y] is the location of the object in world coordinates if b=True, [x,y]=[-1,-1] if b=False

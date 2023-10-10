@@ -75,7 +75,7 @@ def create_camera_net(start_loc, dist_x, dist_y, spacing, include_camera_at_star
 
 if __name__ == "__main__":
     res = create_camera_net((500, 500), dist_x=360, dist_y=360, spacing=30)
-
+    debug = False
     # numpy to list
     print(len(res))   
     print(res) 
@@ -83,4 +83,5 @@ if __name__ == "__main__":
     # plot the camera locations
     import matplotlib.pyplot as plt
     plt.scatter(res[:, 0], res[:, 1])
-    plt.savefig('test.png')
+    if debug:
+        plt.savefig('test_create_camera_net.png')

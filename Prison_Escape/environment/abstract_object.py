@@ -3,10 +3,18 @@ import numpy as np
 import matplotlib.pyplot as plt
 from Prison_Escape.environment.utils import distance
 
+raw_env_path = "/home/tsaisplus/MuRPE_base/Opponent-Modeling-Env/Prison_Escape/environment/configs/mytest.yaml"
+import yaml
+with open(raw_env_path, 'r') as stream:
+    data = yaml.safe_load(stream)
+DIM_X = data['terrain_x']
+DIM_Y = data['terrain_y']
+
 class AbstractObject:
     def __init__(self, terrain, location):
         """
         Any abstract object with a location on the terrain.
+        For example: Hideout
         :param terrain: a terrain instance
         :param location: a list of length 2. For example, [5, 7]
         """
@@ -21,7 +29,8 @@ class AbstractObject:
         :param dim_y: the maximum coordinate on y
         :return: a list of length 2 representing the location
         """
-        return AbstractObject.generate_random_locations_with_range((0, dim_x), (0, dim_y))
+        raise NotImplementedError("generate_random_locations. All location should be specified")
+        # return AbstractObject.generate_random_locations_with_range((0, dim_x), (0, dim_y))
 
     @staticmethod
     def generate_random_locations_with_range(range_x, range_y):
@@ -33,7 +42,8 @@ class AbstractObject:
         """
         x_coord = np.random.randint(range_x[0], range_x[1])
         y_coord = np.random.randint(range_y[0], range_y[1])
-        return [x_coord, y_coord]
+        raise NotImplementedError("generate_random_locations_with_range. All location should be specified")
+        # return [x_coord, y_coord]
 
 
 class MovingObject(AbstractObject):
@@ -68,7 +78,8 @@ class MovingObject(AbstractObject):
 
     def move(self, camera_list, time_step_delta, last_known_fugitive_location):
         """
-            Movement heuristic when the helicopter or search party has not been detected (logic exists in prisoner_env.env.step)
+            Movement heuristic when the helicopter or search party has not been detected
+            (logic exists in prisoner_env.env.step)
             :param camera_list: a list of camera objects
             :param time_step_delta: time between current timestep and last detected timestep
             :param last_known_fugitive_location: the last known fugitive location (np.array[x, y])
@@ -212,15 +223,15 @@ class MovingObject(AbstractObject):
     def sample_destinations(self, time_step_delta=None, last_known_fugitive_location=None, sample_method = 'random'):
         """ Sample destination to go to """
 
-        x = np.arange(0,2428)
-        y = np.arange(0,2428)
-        xx,yy = np.meshgrid(x,y,sparse=True)
+        x = np.arange(0,DIM_X)
+        y = np.arange(0,DIM_Y)
+        xx,yy = np.meshgrid(x, y, sparse=True)
 
         # V0 - RANDOM HEURISTIC
         if sample_method == 'random':
-            sample_index = [np.random.randint(0, 2428),np.random.randint(0, 2428)]
-            while self.terrain.world_representation[0, sample_index[0], sample_index[1]] == 1 :
-                sample_index = [np.random.randint(0, 2428),np.random.randint(0, 2428)]
+            sample_index = [np.random.randint(0, DIM_X),np.random.randint(0, DIM_Y)]
+            while self.terrain.world_representation[0, sample_index[0], sample_index[1]] == 1:
+                sample_index = [np.random.randint(0, DIM_X),np.random.randint(0, DIM_Y)]
         # V1 - RBF HEURISTIC
         elif sample_method == 'rbf':
             # assumes uniform distribution of fugitive speeds
@@ -234,7 +245,7 @@ class MovingObject(AbstractObject):
             # create mesh grid and form rbf
             rbf = np.exp(-1/(2*var_s**2) * abs( r-np.sqrt( (xx-last_known_fugitive_location[0])**2 + (yy-last_known_fugitive_location[1])**2 ) )**2 ) # * 1/(var_s*np.sqrt(2*np.pi)) * 
             # bias towards where we think fugitive is more likely to head (hard coded towards (0,0) now, but this can be towards known hideouts or direction we previously observed fugitive moving in)
-            gradient = np.outer(np.linspace(1,0,2428),np.linspace(1,0,2428))
+            gradient = np.outer(np.linspace(1,0,DIM_X),np.linspace(1,0,DIM_Y))
             rbf_with_gradient = rbf * gradient + (0.0001*np.ones_like(rbf))
             rbf_with_gradient = rbf_with_gradient / sum(sum(rbf_with_gradient))
 
@@ -249,7 +260,7 @@ class MovingObject(AbstractObject):
         plot_flag = False
         if plot_flag:
             if sample_method == 'random':
-                plt.contourf(x,y,np.zeros((2428,2428)))
+                plt.contourf(x,y,np.zeros((DIM_X,DIM_Y)))
             elif sample_method == 'rbf':
                 plt.contourf(x,y,rbf_with_gradient)
             plt.plot(sample_index[0], sample_index[1], marker="o", markersize=20, markeredgecolor="red", markerfacecolor="green")
@@ -321,6 +332,7 @@ class MovingObject(AbstractObject):
         new_location = np.round([self.location[0] + step[0], self.location[1] + step[1]]).astype(np.int)
 
         desired_heading = np.arctan2(direction[1], direction[0])
+
         mountain_dist, mountain_in_range = self.in_range_of_mountain(new_location, mountain_outer_range)
         if mountain_in_range:
             # if direction_mode:
@@ -604,7 +616,7 @@ class MovingObject(AbstractObject):
                 self.location = np.array([self.location[0]+int(np.round(step[0])),self.location[1]+int(np.round(step[1]))])
         if self.terrain.violate_edge_constraints(self.location[0],self.location[1],1,1):
             self.location = old_location
-            self.destination = [np.random.randint(0, 2428),np.random.randint(0, 2428)]
+            self.destination = [np.random.randint(0, DIM_X),np.random.randint(0, DIM_Y)]
 
     def get_angle_away(self, object_location, location, theta):
         """ If the object's desired heading is towards the mountain, move at the incident angle away from the mountain. 
@@ -683,7 +695,8 @@ class MovingObject(AbstractObject):
         fugitive_speed_floor = 1
         camera_detection_object_type_coefficient = 1.0
         # cameras can detect an object within 4 grids moving with speed 1 with 100% PoD in wood
-        # return 4 * self.detection_terrain_coefficient[self.terrain.terrain_given_location(self.location)] * self.detection_object_type_coefficient * speed
+        # return 4 * self.detection_terrain_coefficient[self.terrain.terrain_given_location(self.location)]
+        # * self.detection_object_type_coefficient * speed
         camera_base_100_pod_distance_floor = 4 * camera_detection_object_type_coefficient * fugitive_speed_floor
         max_pod_distance = camera_base_100_pod_distance_floor * 3 + buffer_range
         for camera in camera_list:
@@ -703,7 +716,8 @@ class DetectionObject(AbstractObject):
         DetectionObject defines object that is able to detect.
         :param terrain: a terrain instance
         :param location: a list of length 2. For example, [5, 7]
-        :param detection_object_type_coefficient: a multiplier of detection due to detection device type (for example, camera = 1, helicopter = 0.5, search party = 0.75)
+        :param detection_object_type_coefficient: a multiplier of detection due to detection device type
+        (for example, camera = 1, helicopter = 0.5, search party = 0.75)
         """
         # self.detection_terrain_coefficient = {
         #     TerrainType.MOUNTAIN: 1.0,
@@ -720,15 +734,28 @@ class DetectionObject(AbstractObject):
         :param speed_object:
         :return: [b,x,y] where b is a boolean indicating detection, and [x,y] is the location of the object in world coordinates if b=True, [x,y]=[-1,-1] if b=False
         """
+        # distance from evader to searcher team member
         distance = np.sqrt(np.square(self.location[0]-location_object[0]) + np.square(self.location[1]-location_object[1]))
+
+        # Calculate the maximum distance within which the Probability of Detection (PoD) is 100%
         base_100_pod_distance = self.base_100_pod_distance(speed_object)
-        if distance < base_100_pod_distance:  # the PoD is 100% within base_100_pod_distance
-            return [1, location_object[0]/2428, location_object[1]/2428]
-        if distance > base_100_pod_distance * 3:  # the PoD is 0% outside 3*base_100_pod_distance
+
+        # if the PoD is 100% within base_100_pod_distance
+        if distance < base_100_pod_distance:
+            # Return a list indicating detection (1) and the object's location in normalized world coordinates [x, y]
+            return [1, location_object[0]/DIM_X, location_object[1]/DIM_Y]
+        # if the PoD is 0% outside 3*base_100_pod_distance
+        if distance > base_100_pod_distance * 3:
+            # Return not detetced
             return [0, -1, -1]
-        probability_of_detection = 1 - (distance - base_100_pod_distance) / (2 * base_100_pod_distance)  # the PoD is linear within [base_100_pod_distance, 3*base_100_pod_distance]
+
+        # Calculate the PoD as a linear function of distance within [base_100_pod_distance, 3*base_100_pod_distance]
+        probability_of_detection = 1 - (distance - base_100_pod_distance) / (2 * base_100_pod_distance)
+        # the PoD is linear within [base_100_pod_distance, 3*base_100_pod_distance]
+
+        # Randomly determine detection based on the PoD
         if np.random.rand() < probability_of_detection:
-            return [1, location_object[0]/2428, location_object[1]/2428]
+            return [1, location_object[0]/DIM_X, location_object[1]/DIM_Y]
         else:
             return [0, -1, -1]
 
@@ -747,4 +774,7 @@ class DetectionObject(AbstractObject):
         :return: the maximum distance of 100% PoD
         """
         # cameras can detect an object within 4 grids moving with speed 1 with 100% PoD in wood
-        return self.detection_factor * self.terrain.detection_coefficient_given_location(self.location) * self.detection_object_type_coefficient * speed
+        a = self.detection_factor * self.terrain.detection_coefficient_given_location(self.location) *  \
+            self.detection_object_type_coefficient * speed
+
+        return a

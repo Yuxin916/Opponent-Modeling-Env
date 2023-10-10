@@ -2,13 +2,13 @@
 
 import numpy as np
 
-from simulator.terrain import Terrain
-from simulator.forest_coverage.generate_square_map import generate_square_map
+from Prison_Escape.environment.terrain import Terrain
+from Prison_Escape.environment.forest_coverage.generate_square_map import generate_square_map
 
 def dist(a, b):
     return np.sqrt((a[0] - b[0])**2 + (a[1] - b[1])**2)
 
-def produce_camera_distribution(dim_x, dim_y, camera_range, target_camera_density, terrain=None):
+def produce_camera_distribution(dim_x, dim_y, camera_range, target_camera_density, terrain=None, unknown_hideout_locations=None):
     """
     Produce a camera distribution that a certain percentage of the map
     
@@ -19,7 +19,7 @@ def produce_camera_distribution(dim_x, dim_y, camera_range, target_camera_densit
         target_camera_density: percentage of the map covered by cameras
     """
 
-    unknown_hideouts = [[376, 1190], [909, 510], [397, 798], [2059, 541], [2011, 103], [901, 883], [1077, 1445], [602, 372], [80, 2274], [279, 477]]
+    unknown_hideouts = unknown_hideout_locations
     camera_density = 0
     camera_set = set()
     while camera_density < target_camera_density:
@@ -37,6 +37,7 @@ def produce_camera_distribution(dim_x, dim_y, camera_range, target_camera_densit
             camera_set.add(camera_location)
 
         camera_density = (len(camera_set) * np.pi * camera_range**2) / (dim_x * dim_y)
+    print(f'camera_density: {camera_density}')
 
     return list(camera_set)
 
@@ -49,21 +50,47 @@ def write_cameras_to_file(camera_list, file_path):
             f.write(f'u,{camera[0]},{camera[1]}\n')
 
 if __name__ == "__main__":
-    # use original map with size 2428x2428
-    dim_x = 2428
-    dim_y = 2428
-    percent_dense = 0.3
-    size_of_dense_forest = int(dim_x * percent_dense)
-    forest_density_array = generate_square_map(size_of_dense_forest=size_of_dense_forest, dim_x=dim_x, dim_y=dim_y)
-    terrain = Terrain(dim_x=dim_x, dim_y=dim_y, forest_color_scale = 1, forest_density_array = forest_density_array, place_mountains=True)
+    raw_env_path = "/home/tsaisplus/MuRPE_base/Opponent-Modeling-Env/Prison_Escape/environment/configs/mytest.yaml"
+    import yaml
 
-    for percentage in range(40, 90, 10):
+    with open(raw_env_path, 'r') as stream:
+        data = yaml.safe_load(stream)
+    DIM_X = data['terrain_x']
+    DIM_Y = data['terrain_y']
+
+    forest_color_scale = 1
+
+    percent_dense = data['percent_dense']
+    size_of_dense_forest = int(DIM_X * percent_dense)
+
+    percent_mountain = data['percent_mountain']
+
+    mountain_locations = []
+
+    forest_density_array = generate_square_map(size_of_dense_forest=size_of_dense_forest, dim_x=DIM_X,
+                                               dim_y=DIM_Y)
+
+    terrain = Terrain(
+        dim_x=DIM_X, dim_y=DIM_Y, percent_mountain=percent_mountain, percent_dense=percent_dense,
+        forest_color_scale=forest_color_scale,
+        forest_density_array=forest_density_array,
+        mountain_locations=mountain_locations)
+
+    camera_range = data['camera_range']
+
+    known_hideout_locations = [list(map(int, (x.split(',')))) for x in data['known_hideout_locations']]
+    unknown_hideout_locations = [list(map(int, (x.split(',')))) for x in data['unknown_hideout_locations']]
+
+    for percentage in range(10, 100, 10):
         print(percentage/100)
-        file_path = f"simulator/camera_locations/{percentage}_percent_cameras.txt"
-        cameras = produce_camera_distribution(2428, 2428, 100, percentage/100, terrain)
+        file_path = f"camera_n_percentage/{percentage}_percent_cameras.txt"
+        cameras = produce_camera_distribution(DIM_X, DIM_Y, camera_range, percentage/100, terrain, unknown_hideout_locations)
         write_cameras_to_file(cameras, file_path)
 
-        known_camera_locations = [[1000, 800], [1400, 400], [1750, 1800], [1580, 1200], [2200, 2200]]
+        known_camera_locations = [[DIM_X//4, DIM_X//4*3], [DIM_X//4, DIM_X//4],
+                                  [DIM_X//2, DIM_X//2],
+                                  [DIM_X//4*3, DIM_X//4*3], [DIM_X//4*3, DIM_X//4]]
+        print(f'known_camera_locations: {known_camera_locations}')
         with open(file_path, 'a') as f:
             for camera in known_camera_locations:
                 f.write(f'k,{camera[0]},{camera[1]}\n')

@@ -1,6 +1,3 @@
-import math
-from types import SimpleNamespace
-
 import copy
 import gc
 import math
@@ -17,19 +14,17 @@ import numpy as np
 import torch
 from PIL import Image
 from gym import spaces
-from tqdm import tqdm
 
 from Prison_Escape.environment.abstract_object import AbstractObject, DetectionObject
 from Prison_Escape.environment.camera import Camera
-from Prison_Escape.environment.forest_coverage.autoencoder import ConvAutoencoder
-from Prison_Escape.environment.forest_coverage.autoencoder import produce_terrain_embedding
 from Prison_Escape.environment.forest_coverage.generate_square_map import generate_square_map
 from Prison_Escape.environment.fugitive import Fugitive
 from Prison_Escape.environment.helicopter import Helicopter
 from Prison_Escape.environment.hideout import Hideout
 from Prison_Escape.environment.observation_spaces import create_observation_space_ground_truth, \
     create_observation_space_fugitive, \
-    create_observation_space_blue_team, create_observation_space_prediction
+    create_observation_space_blue_team, create_observation_space_prediction, \
+    create_action_space_blue_team
 from Prison_Escape.environment.observation_spaces import transform_blue_detection_of_fugitive
 from Prison_Escape.environment.search_party import SearchParty
 from Prison_Escape.environment.terrain import Terrain
@@ -76,14 +71,16 @@ class PrisonerBothEnv(gym.Env):
     PrisonerEnv simulates the prisoner behavior in a grid world.
     The considered factors include
         - prisoner
-        - terrain (woods, dense forest, high mountains)
+        - terrain (woods)
         - hideouts (targets)
         - max-time (72 hours)
         - cameras
         - helicopters
         - search parties
 
-    *Detection is encoded by a three tuple [b, x, y] where b in binary. If b=1 (detected), [x, y] will have the detected location in world coordinates. If b=0 (not detected), [x, y] will be [-1, -1].
+    *Detection is encoded by a three tuple [b, x, y] where b in binary.
+    If b=1 (detected), [x, y] will have the detected location in world coordinates.
+    If b=0 (not detected), [x, y] will be [-1, -1].
 
     State space
         - Terrain
@@ -98,7 +95,8 @@ class PrisonerBothEnv(gym.Env):
         - Self location, speed, heading
         - Detection of [helicopters, helicopter dropped cameras, search parties]
 
-    Action space
+    Action space (evader)
+        # TODO: change this to discrete action space
         - 2 dimensional: speed [1,15] x direction [-pi, pi]
         - 2 dimensional: speed [1,15] x direction [-pi, pi]
 
@@ -131,7 +129,9 @@ class PrisonerBothEnv(gym.Env):
         - Each timestep represents 1 min, and the episode horizon is T=4320 (72 hours)
         - Each grid represents 21 meters
         - Our grid size is 2428x2428 as of now, representing a 50.988 kms x 50.988 kms field
+        - Change to NxN grid
         - We have continuous speed profile from 1 grid/timestep to 15 grids/timestep (1.26km/h to 18.9km/h)
+        # TODO: How to change to waypoints? in discrete format
         - Right now we have by default:
             - 2 search parties
             - 1 helicopter
@@ -143,55 +143,76 @@ class PrisonerBothEnv(gym.Env):
     """
 
     def __init__(self,
+                 # terrain
                  terrain=None,
+                 terrain_x=None,
+                 terrain_y=None,
                  terrain_map=None,
+                 percent_dense=None,
+                 percent_mountain=None,
+                 mountain_locations=None,
+
+                 # camera
+                 random_cameras=False,
+                 num_random_unknown_cameras=None,
+                 num_random_known_cameras=None,
+                 camera_range_factor=1,
+                 camera_file_path="/home/tsaisplus/MuRPE_base/Opponent-Modeling-Env/Prison_Escape/environment/camera_locations/camera_n_percentage/10_percent_cameras.txt",
+                 camera_net_bool=False,
+                 camera_net_path=None,
+
+                 # pursuers team
                  num_towns=0,
                  num_search_parties=2,
                  num_helicopters=1,
+                 search_party_speed=6.5,
+                 helicopter_speed=127,
                  helicopter_battery_life=360,
                  helicopter_recharge_time=360,
+                 helicopter_init_pos=None,
+                 search_party_init_pos=None,
+                 random_init_positions=False,
+
+                 # evader team
                  spawn_mode='normal',
                  spawn_range=15.,
-                 max_timesteps=4320,
-                 hideout_radius=50.,
-                 reward_scheme=None,
-                 random_hideout_locations=False,
+                 min_distance_from_hideout_to_start=1000,
+                 prisoner_init_pos=None,
+
+                 # hideout
                  num_known_hideouts=1,
                  num_unknown_hideouts=2,
-                 known_hideout_locations=[[323, 1623], [1804, 737], [317, 2028], [819, 1615], [1145, 182], [1304, 624],
-                                          [234, 171], [2398, 434], [633, 2136], [1590, 2]],
-                 unknown_hideout_locations=[[376, 1190], [909, 510], [397, 798], [2059, 541], [2011, 103], [901, 883],
-                                            [1077, 1445], [602, 372], [80, 2274], [279, 477]],
-                 random_cameras=False,
-                 min_distance_from_hideout_to_start=1000,
-                 num_random_unknown_cameras=25,
-                 num_random_known_cameras=25,
-                 camera_net_bool=False,
-                 camera_net_path=None,
-                 mountain_locations=[(400, 300), (1600, 1800)],
-                 camera_range_factor=1,
-                 camera_file_path="/home/tsaisplus/MuRPE_base/Opponent-Modeling-Env/Prison_Escape/environment/camera_locations/original.txt",
-                 observation_step_type="Fugitive",  # Fugitive, Blue, GroundTruth
+                 hideout_radius=50.,
+                 random_hideout_locations=False,
+                 known_hideout_locations=None,
+                 unknown_hideout_locations=None,
+
+                 # observation
+                 store_last_k_fugitive_detections=False,
                  observation_terrain_feature=True,
                  include_camera_at_start=False,
                  include_start_location_blue_obs=False,
-                 stopping_condition=False,
-                 step_reset=True,
-                 debug=False,
-                 store_last_k_fugitive_detections=False,
+
+                 # others
+                 step_reset=True,  # TODO: this is important
                  detection_factor=4.0,
-                 search_party_speed=6.5,
-                 helicopter_speed=127,
+
+                 max_timesteps=4320,
+
+                 reward_scheme=None,
+                 stopping_condition=False,
+                 debug=True,
+
                  ):
         """
         PrisonerEnv simulates the prisoner behavior in a grid world.
         :param terrain: If given, the terrain is used from this object
-        :param terrain_map_file: This is the file that contains the terrain map, only used if terrain is None
-            If none, the default map is used.
-            Currently all the maps are stored in "/star-data/prisoner-maps/"
-                We load in the map from .npy file, we use csv_generator.py to convert .nc to .npy
-            If directory, cycle through all the files upon reset
-            If single .npy file, use that file
+        # :param terrain_map_file: This is the file that contains the terrain map, only used if terrain is None
+        #     If none, the default map is used.
+        #     Currently all the maps are stored in "/star-data/prisoner-maps/"
+        #         We load in the map from .npy file, we use csv_generator.py to convert .nc to .npy
+        #     If directory, cycle through all the files upon reset
+        #     If single .npy file, use that file
         :param num_towns:
         :param num_search_parties:
         :param num_helicopters:
@@ -209,16 +230,18 @@ class PrisonerBothEnv(gym.Env):
             'uniform_hideout_dist': spawn the prisoner at min_distance_from_hideout_to_start from the hideouts
                         This assumes the hideouts are chosen first
             'hideout': the prisoner spawns within `spawn_range` of the hideout
-        :param spawn_range: how far from the edge of the hideout the prisoner spawns in 'hideout' mode, or how far from the corner the prisoner spawn in 'corner' mode
+        :param spawn_range: how far from the edge of the hideout the prisoner spawns in 'hideout' mode, or
+        how far from the corner the prisoner spawn in 'corner' mode
         :param max_timesteps: time horizon for each rollout. Default is 4320 (minutes = 72 hours)
         :param hideout_radius: minimum distance from a hideout to be considered "on" the hideout
-        :param reward_scheme: a RewardScheme object definining reward scales for different events. If omitted, a default will be used. A custom one can be constructed. Several presets are available under RewardScheme.presets.
+        :param reward_scheme: a RewardScheme object definining reward scales for different events. If omitted, a default will be used.
+        A custom one can be constructed. Several presets are available under RewardScheme.presets.
         :param known_hideout_locations: list of tuples of known hideout locations
         :param unknown_hideout_locations: list of tuples of unknown hideout locations
         :param random_cameras: boolean of whether to use random camera placements or fixed camera placements
         :param num_random_unknown_cameras: number of random unknown cameras
         :param num_random_known_cameras: number of random known cameras
-        :param camera_file_path: path to the file containing the camera locations for the unknown cameras. This it for us to test the Filtering algorithm
+        :param camera_file_path: path to the file containing the camera locations for the unknown cameras. This it for us to test.txt the Filtering algorithm
         :param camera_net_bool: boolean of whether to use the camera net around the fugitive or not
         :param camera_net_path: if None, place camera net by generating, if path, use the path
         :observation_step_type: What observation is returned in the "step" and "reset" functions
@@ -227,7 +250,7 @@ class PrisonerBothEnv(gym.Env):
             'GroundTruth': Returns information of all agents in the environment
             'Prediction': Returns fugitive observations but without the unknown hideouts
         :observation_terrain_feature: boolean of whether to include the terrain feature in the observation
-        :stopping_condition: boolean of whether to stop the game when the fugitive produces 0 speed
+        :stopping_condition: boolean of whether to stop the game when the fugitive produces 0 speed #TODO: when will evader produce zero speed
         :step_reset: boolean of whether to reset the game after the episode is over or just wait at the final location no matter what action is given to it
             This is to make the multi-step prediction rollouts to work properly.
             Default is True 
@@ -241,21 +264,35 @@ class PrisonerBothEnv(gym.Env):
         self.terrain_list = []
         self.DEBUG = debug
         self.store_last_k_fugitive_detections = store_last_k_fugitive_detections
+
+        # Pursuer Team
+        self.helicopter_init_pos = helicopter_init_pos
+        self.search_party_init_pos = search_party_init_pos
+        self.prisoner_init_pos = prisoner_init_pos
+
+        # Others
         forest_color_scale = 1
+
         # If no terrain is provided, we read from map file
         if terrain is None:
             if terrain_map is None:
-                # use original map with size 2428x2428
-                dim_x = 2428
-                dim_y = 2428
-                percent_dense = 0.30
+                # use original map with size 2428x2428 (NxN)
+                dim_x = terrain_x
+                dim_y = terrain_y
                 size_of_dense_forest = int(dim_x * percent_dense)
                 forest_density_array = generate_square_map(size_of_dense_forest=size_of_dense_forest, dim_x=dim_x,
                                                            dim_y=dim_y)
+                if self.DEBUG:
+                    np.savetxt("generated_map.csv", forest_density_array, delimiter=",")
+                    print('output the generated map to generated_map.csv')
                 forest_density_list = [forest_density_array]
-                self.terrain_list = [Terrain(dim_x=dim_x, dim_y=dim_y, forest_color_scale=forest_color_scale,
+                # make terrain a list
+                self.terrain_list = [Terrain(dim_x=dim_x, dim_y=dim_y,
+                                             percent_mountain=0, percent_dense=percent_dense,
+                                             forest_color_scale=forest_color_scale,
                                              forest_density_array=forest_density_array,
                                              mountain_locations=mountain_locations)]
+
             else:
                 # if directory, cycle through all the files
                 if os.path.isdir(terrain_map):
@@ -266,9 +303,13 @@ class PrisonerBothEnv(gym.Env):
                             forest_density_list.append(forest_density_array)
                             dim_x, dim_y = forest_density_array.shape
                             self.terrain_list.append(
-                                Terrain(dim_x=dim_x, dim_y=dim_y, forest_color_scale=forest_color_scale,
+                                Terrain(dim_x=dim_x, dim_y=dim_y,
+                                        percent_mountain=percent_mountain, percent_dense=percent_dense,
+                                        forest_color_scale=forest_color_scale,
                                         forest_density_array=forest_density_array,
                                         mountain_locations=mountain_locations))
+                    raise NotImplementedError("terrain_map should be null")
+
                 else:
                     forest_density_array = np.load(terrain_map)
                     forest_density_list = [forest_density_array]
@@ -276,23 +317,27 @@ class PrisonerBothEnv(gym.Env):
                     self.terrain_list = [Terrain(dim_x=dim_x, dim_y=dim_y, forest_color_scale=forest_color_scale,
                                                  forest_density_array=forest_density_array,
                                                  mountain_locations=mountain_locations)]
+                    raise NotImplementedError("terrain_map should be null")
+
         else:
             # Getting terrain from terrain object
             # Assume we are just using a single terrain object
             # TODO: make this robust when we are switching terrains
             forest_density_list = [terrain.forest_density_array]
             self.terrain_list = [terrain]
+            raise NotImplementedError("Terrain should be null and terrain_map should be null")
 
         # save all cached terrain images
         self._cached_terrain_images = [terrain.visualize(just_matrix=True) for terrain in self.terrain_list]
 
         if observation_terrain_feature:
-            # we save these to add to the observations
-            model = ConvAutoencoder()
-            model.load_state_dict(torch.load('Prison_Escape/environment/forest_coverage/autoencoder_state_dict.pt'))
-            self._cached_terrain_embeddings = [produce_terrain_embedding(model, terrain_np) for terrain_np in
-                                               forest_density_list]
-            terrain_embedding_size = self._cached_terrain_embeddings[0].shape[0]
+            raise NotImplementedError("Terrain feature is not implemented yet")
+            # # we save these to add to the observations
+            # model = ConvAutoencoder()
+            # model.load_state_dict(torch.load('Prison_Escape/environment/forest_coverage/autoencoder_state_dict.pt'))
+            # self._cached_terrain_embeddings = [produce_terrain_embedding(model, terrain_np) for terrain_np in
+            #                                    forest_density_list]
+            # terrain_embedding_size = self._cached_terrain_embeddings[0].shape[0]
         else:
             # empty list
             self._cached_terrain_embeddings = [np.array([])] * len(forest_density_list)
@@ -300,12 +345,14 @@ class PrisonerBothEnv(gym.Env):
 
         # initialize terrain for this run
         self.set_terrain_paramaters()
-        self.prisoner = Fugitive(self.terrain, [2400, 2400])  # the actual spawning will happen in set_up_world
+        self.prisoner = Fugitive(self.terrain, self.prisoner_init_pos)
+        # the actual spawning will happen in set_up_world
 
         # Read in the cameras from file
         if random_cameras:
             self.num_random_unknown_cameras = num_random_unknown_cameras
             self.num_random_known_cameras = num_random_known_cameras
+            raise NotImplementedError("No random cameras yet")
         else:
             self.camera_file_path = camera_file_path
             self.known_camera_locations, self.unknown_camera_locations = self.read_camera_file(camera_file_path)
@@ -315,18 +362,17 @@ class PrisonerBothEnv(gym.Env):
         self.dim_x = self.terrain.dim_x
         self.dim_y = self.terrain.dim_y
 
-        # self.num_unknown_cameras = self.num_unknown_cameras
-        self.num_towns = num_towns
         self.num_search_parties = num_search_parties
         self.num_helicopters = num_helicopters
         self.random_hideout_locations = random_hideout_locations
 
         self.num_known_hideouts = num_known_hideouts
         self.num_unknown_hideouts = num_unknown_hideouts
-        # self.num_known_cameras = self.num_known_cameras + num_known_hideouts # add camera for each known hideout
 
         self.helicopter_battery_life = helicopter_battery_life
         self.helicopter_recharge_time = helicopter_recharge_time
+
+        self.random_init_positions = random_init_positions
         self.spawn_mode = spawn_mode
         self.spawn_range = spawn_range
         self.hideout_radius = hideout_radius
@@ -336,7 +382,7 @@ class PrisonerBothEnv(gym.Env):
         self.random_cameras = random_cameras
         self.camera_file_path = camera_file_path
         self.camera_range_factor = camera_range_factor
-        self.current_prisoner_speed = 3  # initialize prisoner speed, used to render detection range
+        self.current_prisoner_speed = 0  # initialize prisoner speed, used to render detection range
         self.step_reset = step_reset
         self.camera_net_bool = camera_net_bool
         self.camera_net_path = camera_net_path
@@ -354,7 +400,16 @@ class PrisonerBothEnv(gym.Env):
         if isinstance(self.reward_scheme, str):
             self.reward_scheme = getattr(RewardScheme.presets, self.reward_scheme)
 
-        self.action_space = spaces.Box(low=np.array([0, -np.pi]), high=np.array([15, np.pi]))
+        self.red_action_space = spaces.Box(low=np.array([0, -np.pi]), high=np.array([15, np.pi]))  # for evader
+
+        # self.blue_action_space = gym.spaces.Dict(dict(search_party_spaces + helicopter_spaces))
+        self.blue_action_space = create_action_space_blue_team(num_helicopters=num_helicopters,
+                                                               num_search_parties=num_search_parties,
+                                                               search_party_speed=search_party_speed,
+                                                               helicopter_speed=helicopter_speed)
+
+        # TODO: custom environment with heterogeneous action/observation spaces
+        # self.action_space = gym.spaces.Dict({id_: self.envs[id_].action_space for id_ in env_config["policies"]})
 
         # initialization of variables
         self.camera_list = []
@@ -405,35 +460,46 @@ class PrisonerBothEnv(gym.Env):
         self.prisoner_location_history = [self.prisoner.location.copy()]
 
         # load image assets
-        self.known_camera_pic = Image.open("Prison_Escape/environment/assets/camera_blue.png")
-        self.unknown_camera_pic = Image.open("Prison_Escape/environment/assets/camera_red.png")
-        self.known_hideout_pic = Image.open("Prison_Escape/environment/assets/star.png")
-        self.unknown_hideout_pic = Image.open("Prison_Escape/environment/assets/star_blue.png")
-        self.town_pic = Image.open("Prison_Escape/environment/assets/town.png")
-        self.search_party_pic = Image.open("Prison_Escape/environment/assets/searching.png")
-        self.helicopter_pic = Image.open("Prison_Escape/environment/assets/helicopter.png")
-        self.prisoner_pic = Image.open("Prison_Escape/environment/assets/prisoner.png")
-        self.detected_prisoner_pic = Image.open("Prison_Escape/environment/assets/detected_prisoner.png")
+        # Define the base path
+        base_path = "/home/tsaisplus/MuRPE_base/Opponent-Modeling-Env/Prison_Escape"
 
-        self.known_camera_pic_cv = cv2.imread("Prison_Escape/environment/assets/camera_blue.png", cv2.IMREAD_UNCHANGED)
-        self.unknown_camera_pic_cv = cv2.imread("Prison_Escape/environment/assets/camera_red.png", cv2.IMREAD_UNCHANGED)
-        self.known_hideout_pic_cv = cv2.imread("Prison_Escape/environment/assets/star.png", cv2.IMREAD_UNCHANGED)
-        self.unknown_hideout_pic_cv = cv2.imread("Prison_Escape/environment/assets/star_blue.png", cv2.IMREAD_UNCHANGED)
-        self.town_pic_cv = cv2.imread("Prison_Escape/environment/assets/town.png", cv2.IMREAD_UNCHANGED)
-        self.search_party_pic_cv = cv2.imread("Prison_Escape/environment/assets/searching.png", cv2.IMREAD_UNCHANGED)
-        self.helicopter_pic_cv = cv2.imread("Prison_Escape/environment/assets/helicopter.png", cv2.IMREAD_UNCHANGED)
-        self.helicopter_no_pic_cv = cv2.imread("Prison_Escape/environment/assets/helicopter_no.png",
+        # Construct absolute paths using os.path.join
+        self.known_camera_pic = Image.open(os.path.join(base_path, "environment/assets/camera_blue.png"))
+        self.unknown_camera_pic = Image.open(os.path.join(base_path, "environment/assets/camera_red.png"))
+        self.known_hideout_pic = Image.open(os.path.join(base_path, "environment/assets/star.png"))
+        self.unknown_hideout_pic = Image.open(os.path.join(base_path, "environment/assets/star_blue.png"))
+        self.town_pic = Image.open(os.path.join(base_path, "environment/assets/town.png"))
+        self.search_party_pic = Image.open(os.path.join(base_path, "environment/assets/searching.png"))
+        self.helicopter_pic = Image.open(os.path.join(base_path, "environment/assets/helicopter.png"))
+        self.prisoner_pic = Image.open(os.path.join(base_path, "environment/assets/prisoner.png"))
+        self.detected_prisoner_pic = Image.open(os.path.join(base_path, "environment/assets/detected_prisoner.png"))
+
+        self.known_camera_pic_cv = cv2.imread(os.path.join(base_path, "environment/assets/camera_blue.png"),
+                                              cv2.IMREAD_UNCHANGED)
+        self.unknown_camera_pic_cv = cv2.imread(os.path.join(base_path, "environment/assets/camera_red.png"),
+                                                cv2.IMREAD_UNCHANGED)
+        self.known_hideout_pic_cv = cv2.imread(os.path.join(base_path, "environment/assets/star.png"),
                                                cv2.IMREAD_UNCHANGED)
-        self.prisoner_pic_cv = cv2.imread("Prison_Escape/environment/assets/prisoner.png", cv2.IMREAD_UNCHANGED)
-        self.detected_prisoner_pic_cv = cv2.imread("Prison_Escape/environment/assets/detected_prisoner.png",
+        self.unknown_hideout_pic_cv = cv2.imread(os.path.join(base_path, "environment/assets/star_blue.png"),
+                                                 cv2.IMREAD_UNCHANGED)
+        self.town_pic_cv = cv2.imread(os.path.join(base_path, "environment/assets/town.png"), cv2.IMREAD_UNCHANGED)
+        self.search_party_pic_cv = cv2.imread(os.path.join(base_path, "environment/assets/searching.png"),
+                                              cv2.IMREAD_UNCHANGED)
+        self.helicopter_pic_cv = cv2.imread(os.path.join(base_path, "environment/assets/helicopter.png"),
+                                            cv2.IMREAD_UNCHANGED)
+        self.helicopter_no_pic_cv = cv2.imread(os.path.join(base_path, "environment/assets/helicopter_no.png"),
+                                               cv2.IMREAD_UNCHANGED)
+        self.prisoner_pic_cv = cv2.imread(os.path.join(base_path, "environment/assets/prisoner.png"),
+                                          cv2.IMREAD_UNCHANGED)
+        self.detected_prisoner_pic_cv = cv2.imread(os.path.join(base_path, "environment/assets/detected_prisoner.png"),
                                                    cv2.IMREAD_UNCHANGED)
 
-        self.default_asset_size = 52
+        self.default_asset_size = 70  # FIXED. How big is the assets image in render
         # Store (t,x,y) for last k detections. Only updated if store_last_k_fugitive_detections is True
         self.last_k_fugitive_detections = [[-1, -1, -1], [-1, -1, -1], [-1, -1, -1], [-1, -1, -1],
                                            [-1, -1, -1], [-1, -1, -1], [-1, -1, -1], [-1, -1, -1]]
         # self._cached_terrain_image = self.terrain.visualize(just_matrix=True)
-        # self.render(show=True)
+        # self.render('heuristic', show=True, fast=True)
 
     def read_camera_file(self, camera_file_path):
         """Generate a lists of camera objects from file
@@ -469,57 +535,6 @@ class PrisonerBothEnv(gym.Env):
         self._cached_terrain_image = self._cached_terrain_images[terrain_index]
         self._terrain_embedding = self._cached_terrain_embeddings[terrain_index]
 
-    def place_random_hideouts(self):
-        for known_hid in range(self.num_known_hideouts):
-            if known_hid == 0:
-                location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
-                while np.linalg.norm(np.array(
-                        [location[0], location[1]]) - self.prisoner.location) < self.min_distance_from_hideout_to_start:
-                    location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
-                if self.DEBUG:
-                    print('prisoner location: ', self.prisoner.location)
-                    print('hideout location: ', location)
-                    print('distance: ', np.linalg.norm(np.array([location[0], location[1]]) - self.prisoner.location))
-                self.hideout_list.append(Hideout(self.terrain, location=location, known_to_good_guys=True))
-            else:
-                location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
-                # make sure hideout is far from each other and far from start location
-                s = [tuple(i.location) for i in self.hideout_list]
-                dists = np.array([math.sqrt((location[0] - s0) ** 2 + (location[1] - s1) ** 2) for s0, s1 in s])
-                while np.linalg.norm(np.array([location[0], location[
-                    1]]) - self.prisoner.location) <= self.min_distance_from_hideout_to_start \
-                        or (dists < self.min_distance_between_hideouts).any():
-                    location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
-                    s = [tuple(i.location) for i in self.hideout_list]
-                    dists = np.array([math.sqrt((location[0] - s0) ** 2 + (location[1] - s1) ** 2) for s0, s1 in s])
-                if self.DEBUG:
-                    print('prisoner location: ', self.prisoner.location)
-                    print('hideout location: ', location)
-                    print('distance: ', np.linalg.norm(np.array([location[0], location[1]]) - self.prisoner.location))
-                self.hideout_list.append(Hideout(self.terrain, location=location, known_to_good_guys=True))
-
-        for unknown_hid in range(self.num_unknown_hideouts):
-            if len(self.hideout_list) >= 1:
-                # make sure hideout is far from each other and far from start location
-                location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
-                s = [tuple(i.location) for i in self.hideout_list]
-                dists = np.array([math.sqrt((location[0] - s0) ** 2 + (location[1] - s1) ** 2) for s0, s1 in s])
-                while np.linalg.norm(np.array(
-                        [location[0], location[1]]) - self.prisoner.location) <= self.min_distance_from_hideout_to_start \
-                        or (dists < self.min_distance_between_hideouts).any():
-                    location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
-                    s = [tuple(i.location) for i in self.hideout_list]
-                    dists = np.array([math.sqrt((location[0] - s0) ** 2 + (location[1] - s1) ** 2) for s0, s1 in s])
-                    if self.DEBUG:
-                        print('prisoner location: ', self.prisoner.location)
-                        print('hideout location: ', location)
-                        print('distance: ',
-                              np.linalg.norm(np.array([location[0], location[1]]) - self.prisoner.location))
-                self.hideout_list.append(Hideout(self.terrain, location=location, known_to_good_guys=False))
-            else:
-                location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
-                self.hideout_list.append(Hideout(self.terrain, location=location, known_to_good_guys=False))
-
     def place_fixed_hideouts(self):
         # specify hideouts' locations. These are passed in from the input args
         # We select a number of hideouts from num_known_hideouts and num_unknown_hideouts
@@ -539,6 +554,8 @@ class PrisonerBothEnv(gym.Env):
         for hideout_location in unknown_hideouts:
             self.hideout_list.append(Hideout(self.terrain, location=hideout_location, known_to_good_guys=False))
 
+        pass
+
     def set_up_world(self):
         """
         This function places all the objects,
@@ -546,7 +563,7 @@ class PrisonerBothEnv(gym.Env):
             - cameras are initialized randomly
             - helicopter is initialized randomly
             - hideouts are initialized always at [20, 80], [100, 20]
-            - search parties are initialized randomly
+            - search parties are initialized randomly or not
             - prisoner is initialized by different self.spawn_mode
         """
         self.camera_list = []
@@ -555,19 +572,20 @@ class PrisonerBothEnv(gym.Env):
         self.search_parties_list = []
         self.town_list = []
         self.hideout_list = []
-        self.min_distance_between_hideouts = 300
+        self.min_distance_between_hideouts = 300  # FIXED
 
         # randomized
         if not self.random_hideout_locations:
             self.place_fixed_hideouts()
         else:
+            assert self.random_hideout_locations is False, "Random hideout locations have not been implemented"
             raise NotImplementedError
             # Random hideouts have not been implemented with spawn mode as uniform hideout dist
             # Random hideouts need to have prisoner location initialized first
-            self.place_random_hideouts()
+            # self.place_random_hideouts()
 
         if self.spawn_mode == 'normal':
-            prisoner_location = [2400, 2400]
+            prisoner_location = self.prisoner_init_pos
         elif self.spawn_mode == 'uniform':
             # in_mountain = True
             mountain_range = 150
@@ -579,6 +597,7 @@ class PrisonerBothEnv(gym.Env):
                 m_dists = np.array([np.linalg.norm(np.array(prisoner_location) - np.array([m[1], m[0]])) for m in
                                     self.terrain.mountain_locations])
                 near_mountain = min(m_dists)
+            raise NotImplementedError("Uniform spawn mode has not been tested")
         elif self.spawn_mode == 'uniform_hideout_dist':
             # Spawn uniformly on the map but with a distance of at least min_distance_from_hideout_to_start
             mountain_range = 150
@@ -595,6 +614,8 @@ class PrisonerBothEnv(gym.Env):
                 m_dists = np.array([np.linalg.norm(np.array(prisoner_location) - np.array([m[1], m[0]])) for m in
                                     self.terrain.mountain_locations])
                 near_mountain = min(m_dists)
+            raise NotImplementedError("uniform_hideout_dist spawn mode has not been tested")
+
         elif self.spawn_mode == 'hideout':
             in_mountain = True
             in_map = False
@@ -609,12 +630,17 @@ class PrisonerBothEnv(gym.Env):
                 in_mountain = self.terrain.world_representation[0, prisoner_location[0], prisoner_location[1]] == 1
                 in_map = prisoner_location[0] in range(0, self.dim_x) and \
                          prisoner_location[1] in range(0, self.dim_y)
+            raise NotImplementedError("hideout spawn mode has not been tested")
+
         elif self.spawn_mode == 'corner':
             # generate the fugitive randomly near the top right corner
             prisoner_location = AbstractObject.generate_random_locations_with_range(
                 [self.dim_x - self.spawn_range, self.dim_x], [self.dim_y - self.spawn_range, self.dim_y])
+            raise NotImplementedError("corner spawn mode has not been tested")
+
         else:
             raise ValueError('Unknown spawn mode "%s"' % self.spawn_mode)
+
         self.prisoner = Fugitive(self.terrain, prisoner_location)
         self.prisoner_start_location = prisoner_location
 
@@ -631,6 +657,7 @@ class PrisonerBothEnv(gym.Env):
 
         if self.camera_net_bool:
             if self.camera_net_path is None:
+                # TODO: why the dist_x and dist_y are 360?
                 cam_locs = create_camera_net(prisoner_location, dist_x=360, dist_y=360, spacing=30,
                                              include_camera_at_start=self.include_camera_at_start)
                 unknown_camera_locations.extend(cam_locs.tolist())
@@ -647,34 +674,43 @@ class PrisonerBothEnv(gym.Env):
                 known_camera_locations.append(i.location)
 
         # initialize these variables for observation spaces
-        self.num_known_cameras = len(known_camera_locations)
+        self.num_known_cameras = len(known_camera_locations)  # known cameras + known hideouts + camera_at_start
         self.num_unknown_cameras = len(unknown_camera_locations)
 
         for counter in range(self.num_known_cameras):
             camera_location = known_camera_locations[counter]
-            self.camera_list.append(Camera(self.terrain, camera_location, known_to_fugitive=True))
+            self.camera_list.append(Camera(self.terrain, camera_location, known_to_fugitive=True,
+                                           detection_object_type_coefficient=self.camera_range_factor))
 
         for counter in range(self.num_unknown_cameras):
             camera_location = unknown_camera_locations[counter]
             self.camera_list.append(Camera(self.terrain, camera_location, known_to_fugitive=False,
                                            detection_object_type_coefficient=self.camera_range_factor))
-
+        if self.DEBUG:
+            print("Set_up_world func happened in init and reset")
+            print("In Set_up_world func, Camera detection range: ", self.camera_list[0].detection_range)
         # specify helicopters' initial locations
         # generate helicopter lists
         for _ in range(self.num_helicopters):
-            helicopter_location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
+            if self.random_init_positions:
+                # generate random helicopter locations
+                helicopter_location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
+            else:
+                # generate specified helicopter locations
+                helicopter_location = self.helicopter_init_pos
+
             self.helicopters_list.append(
                 Helicopter(self.terrain, helicopter_location, speed=self.helicopter_speed))  # 100mph=127 grids/timestep
-
-        # uncomment if you want to specify search parties' initial locations
-        # search_party_initial_locations = [[1800, 2400], [1400, 1500]]
-
-        # random
-        # search_party_initial_locations = [AbstractObject.generate_random_locations(self.dim_x, self.dim_y),
-        #                                   AbstractObject.generate_random_locations(self.dim_x, self.dim_y)]
-        search_party_initial_locations = []
-        for _ in range(self.num_search_parties):
-            search_party_initial_locations.append(AbstractObject.generate_random_locations(self.dim_x, self.dim_y))
+        if self.DEBUG:
+            print("In Set_up_world func, Helicopter speed: ", self.helicopters_list[0].speed)
+            print("In Set_up_world func, Helicopter detection range: ", self.helicopters_list[0].detection_range)
+            print("In Set_up_world func, Helicopter location: ", self.helicopters_list[0].location)
+        if self.random_init_positions:
+            search_party_initial_locations = []
+            for _ in range(self.num_search_parties):
+                search_party_initial_locations.append(AbstractObject.generate_random_locations(self.dim_x, self.dim_y))
+        else:
+            search_party_initial_locations = self.search_party_init_pos
 
         # generate search party lists
         for counter in range(self.num_search_parties):
@@ -683,92 +719,83 @@ class PrisonerBothEnv(gym.Env):
             self.search_parties_list.append(
                 SearchParty(self.terrain, search_party_location, speed=self.search_party_speed))  # speed=4
 
-        # Currently not modeling town
-        # # generate town lists
-        # for i in range(self.num_towns):
-        #     # this is just trying to get to similar set-up as the figure in the pdf
-        #     if i == 0:
-        #         town_location = AbstractObject.generate_random_locations_with_range((300, 350), (600, 700))
-        #     elif i == 1:
-        #         town_location = AbstractObject.generate_random_locations_with_range((400, 450), (700, 800))
-        #     elif i == 2:
-        #         town_location = AbstractObject.generate_random_locations_with_range((330, 430), (70, 130))
-        #     elif i == 3:
-        #         town_location = AbstractObject.generate_random_locations_with_range((500, 600), (250, 350))
-        #     else:
-        #         town_location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
-        #     self.town_list.append(Town(self.terrain, town_location))
+        if self.DEBUG:
+            print("In Set_up_world func, SearchParty speed: ", self.search_parties_list[0].speed)
+            print("In Set_up_world func, SearchParty detection range: ", self.search_parties_list[0].detection_range)
+            print("In Set_up_world func, SearchParty location: ", self.search_parties_list[0].location)
+        pass
 
     @property
     def hideout_locations(self):
         return [hideout.location for hideout in self.hideout_list]
 
-    def get_state(self):
-        """
-        Compile a dictionary to represent environment's current state (only including things that will change in .step())
-        :return: a dictionary with prisoner_location, search_party_locations, helicopter_locations, timestep, done, prisoner_location_history, is_detected
-        """
-        prisoner_location = self.prisoner.location.copy()
-        search_party_locations = []
-        for search_party in self.search_parties_list:
-            search_party_locations.append(search_party.location.copy())
-        helicopter_locations = []
-        for helicopter in self.helicopters_list:
-            helicopter_locations.append(helicopter.location.copy())
-        timestep = self.timesteps
-        done = self.done
-        prisoner_location_history = self.prisoner_location_history.copy()
-        is_detected = self.is_detected
-
-        prediction_observation = self._prediction_observation.copy()
-        fugitive_observation = self._fugitive_observation.copy()
-        ground_truth_observation = self._ground_truth_observation.copy()
-        blue_observation = self._blue_observation.copy()
-
-        # print(self.search_parties_list[0].location)
-        return {
-            "prisoner_location": prisoner_location,
-            "search_party_locations": search_party_locations,
-            "helicopter_locations": helicopter_locations,
-            "timestep": timestep,
-            "done": done,
-            "prisoner_location_history": prisoner_location_history,
-            "is_detected": is_detected,
-            # "blue_heuristic": copy.deepcopy(self.blue_heuristic),
-            "prediction_observation": prediction_observation,
-            "fugitive_observation": fugitive_observation,
-            "ground_truth_observation": ground_truth_observation,
-            "blue_observation": blue_observation,
-            "done": self.done
-        }
-
-    def set_state(self, state_dict):
-        """
-        Set the state of the env by state_dict. Paired with `get_state`
-        :param state_dict: a state dict returned by `get_state`
-        """
-        self.prisoner.location = state_dict["prisoner_location"].copy()
-        for i, search_party in enumerate(self.search_parties_list):
-            search_party.location = state_dict["search_party_locations"][i].copy()
-        for i, helicopter in enumerate(self.helicopters_list):
-            helicopter.location = state_dict["helicopter_locations"][i].copy()
-        self.timesteps = state_dict["timestep"]
-        self.done = state_dict["done"]
-        self.prisoner_location_history = state_dict["prisoner_location_history"].copy()
-        self.is_detected = state_dict["is_detected"]
-        # self.blue_heuristic = state_dict["blue_heuristic"]
-
-        # self.search_parties_list = self.blue_heuristic.search_parties
-        # self.helicopters_list = self.blue_heuristic.helicopters
-
-        # set previous observations
-        self._prediction_observation = state_dict["prediction_observation"].copy()
-        self._fugitive_observation = state_dict["fugitive_observation"].copy()
-        self._ground_truth_observation = state_dict["ground_truth_observation"].copy()
-        self._blue_observation = state_dict["blue_observation"].copy()
-        self.done = state_dict["done"]
-        gc.collect()
-        # self.blue_heuristic.step(self.prisoner.location)
+    # def get_state(self):
+    #     """
+    #     Compile a dictionary to represent environment's current state (only including things that will change in .step())
+    #     :return: a dictionary with prisoner_location, search_party_locations, helicopter_locations, timestep, done,
+    #     prisoner_location_history, is_detected
+    #     """
+    #     prisoner_location = self.prisoner.location.copy()
+    #     search_party_locations = []
+    #     for search_party in self.search_parties_list:
+    #         search_party_locations.append(search_party.location.copy())
+    #     helicopter_locations = []
+    #     for helicopter in self.helicopters_list:
+    #         helicopter_locations.append(helicopter.location.copy())
+    #     timestep = self.timesteps
+    #     done = self.done
+    #     prisoner_location_history = self.prisoner_location_history.copy()
+    #     is_detected = self.is_detected
+    #
+    #     prediction_observation = self._prediction_observation.copy()
+    #     fugitive_observation = self._fugitive_observation.copy()
+    #     ground_truth_observation = self._ground_truth_observation.copy()
+    #     blue_observation = self._blue_observation.copy()
+    #
+    #     # print(self.search_parties_list[0].location)
+    #     return {
+    #         "prisoner_location": prisoner_location,
+    #         "search_party_locations": search_party_locations,
+    #         "helicopter_locations": helicopter_locations,
+    #         "timestep": timestep,
+    #         "done": done,
+    #         "prisoner_location_history": prisoner_location_history,
+    #         "is_detected": is_detected,
+    #         # "blue_heuristic": copy.deepcopy(self.blue_heuristic),
+    #         "prediction_observation": prediction_observation,
+    #         "fugitive_observation": fugitive_observation,
+    #         "ground_truth_observation": ground_truth_observation,
+    #         "blue_observation": blue_observation,
+    #         "done": self.done
+    #     }
+    #
+    # def set_state(self, state_dict):
+    #     """
+    #     Set the state of the env by state_dict. Paired with `get_state`
+    #     :param state_dict: a state dict returned by `get_state`
+    #     """
+    #     self.prisoner.location = state_dict["prisoner_location"].copy()
+    #     for i, search_party in enumerate(self.search_parties_list):
+    #         search_party.location = state_dict["search_party_locations"][i].copy()
+    #     for i, helicopter in enumerate(self.helicopters_list):
+    #         helicopter.location = state_dict["helicopter_locations"][i].copy()
+    #     self.timesteps = state_dict["timestep"]
+    #     self.done = state_dict["done"]
+    #     self.prisoner_location_history = state_dict["prisoner_location_history"].copy()
+    #     self.is_detected = state_dict["is_detected"]
+    #     # self.blue_heuristic = state_dict["blue_heuristic"]
+    #
+    #     # self.search_parties_list = self.blue_heuristic.search_parties
+    #     # self.helicopters_list = self.blue_heuristic.helicopters
+    #
+    #     # set previous observations
+    #     self._prediction_observation = state_dict["prediction_observation"].copy()
+    #     self._fugitive_observation = state_dict["fugitive_observation"].copy()
+    #     self._ground_truth_observation = state_dict["ground_truth_observation"].copy()
+    #     self._blue_observation = state_dict["blue_observation"].copy()
+    #     self.done = state_dict["done"]
+    #     gc.collect()
+    #     # self.blue_heuristic.step(self.prisoner.location)
 
     def step_both(self, red_action: np.ndarray, blue_action: np.ndarray):
         """
@@ -790,7 +817,8 @@ class PrisonerBothEnv(gym.Env):
                 observation = np.zeros(self.observation_space.shape)
                 total_reward = 0
                 return observation, total_reward, self.done, {}
-        assert self.action_space.contains(red_action), f"Actions should be in the action space, but got {red_action}"
+        assert self.red_action_space.contains(
+            red_action), f"Actions should be in the action space, but got {red_action}"
 
         self.timesteps += 1
         old_prisoner_location = self.prisoner.location.copy()
@@ -832,34 +860,46 @@ class PrisonerBothEnv(gym.Env):
             # add stop condition if our speed is between 0 and 1
             if (0 <= red_action[0] < 1):
                 self.done = True
+                if self.DEBUG:
+                    print("Stopping condition - evader speed is between 0 and 1")
         else:
             # stop if we are near hideout
             if self.near_hideout():
                 self.done = True
+                if self.DEBUG:
+                    print("Stopping condition - evader is near hideout")
 
         # game ends?
         if self.timesteps >= self.max_timesteps:
             self.done = True
+            if self.DEBUG:
+                print("Stopping condition - max timesteps reached")
 
         # Construct observation from these
         parties_detection_of_fugitive = self._determine_blue_detection_of_red(fugitive_speed)
         fugitive_detection_of_parties = self._determine_red_detection_of_blue(fugitive_speed)
         self._fugitive_observation = self._construct_fugitive_observation(red_action, fugitive_detection_of_parties,
-                                                                          self._terrain_embedding)
+                                                                          self._terrain_embedding).astype(np.float32)
         self._prediction_observation = self._construct_prediction_observation(red_action, fugitive_detection_of_parties,
-                                                                              self._terrain_embedding)
+                                                                              self._terrain_embedding).astype(
+            np.float32)
         self._ground_truth_observation = self._construct_ground_truth(red_action, fugitive_detection_of_parties,
                                                                       parties_detection_of_fugitive,
-                                                                      self._terrain_embedding)
+                                                                      self._terrain_embedding).astype(np.float32)
 
         parties_detection_of_fugitive_one_hot = transform_blue_detection_of_fugitive(parties_detection_of_fugitive)
 
         self._blue_observation = self._construct_blue_observation(parties_detection_of_fugitive_one_hot,
                                                                   self._terrain_embedding,
-                                                                  self.include_start_location_blue_obs)
+                                                                  self.include_start_location_blue_obs).astype(
+            np.float32)
 
         # calculate reward
         self.is_detected = self.is_fugitive_detected(parties_detection_of_fugitive)
+
+        if self.is_detected:
+            if self.DEBUG:
+                print("Evader is detected")
         if self.is_detected and self.store_last_k_fugitive_detections:
             self.last_k_fugitive_detections.pop(0)  # Remove old detection
             self.last_k_fugitive_detections.append([self.timesteps / self.max_timesteps,
@@ -956,24 +996,34 @@ class PrisonerBothEnv(gym.Env):
             parties_detection_of_fugitive.extend(search_party.detect(self.prisoner.location, speed))
 
         if any(parties_detection_of_fugitive[::3]):
+            # print('Evader Detected!')
             self.last_detected_timestep = self.timesteps
         return parties_detection_of_fugitive
 
-    def _determine_detection(self, speed):
+    def _determine_detection_reset(self, speed):
+        """
+            This function determines both sides. Evader detect pursuers && pursuers detect evader INITIALLY SPEED IS 0!
+        """
         fugitive_detection_of_parties = []
         SPRINT_SPEED_THRESHOLD = 8
+        # Evader detect pursuers
         for helicopter in self.helicopters_list:
             if speed > SPRINT_SPEED_THRESHOLD:
                 # when sprinting the prisoner cannot detect anything
                 fugitive_detection_of_parties.extend([0, -1, -1])
             else:
                 fugitive_detection_of_parties.extend(self.prisoner.detect(helicopter.location, helicopter))
+                if self.DEBUG:
+                    print("Helicopter detection_range: ", helicopter.detection_range)
+
         for search_party in self.search_parties_list:
             if speed > SPRINT_SPEED_THRESHOLD:
                 # when sprinting the prisoner cannot detect anything
                 fugitive_detection_of_parties.extend([0, -1, -1])
             else:
                 fugitive_detection_of_parties.extend(self.prisoner.detect(search_party.location, search_party))
+
+        # Pursuers detect evader
         parties_detection_of_fugitive = []
         for camera in self.camera_list:
             parties_detection_of_fugitive.extend(camera.detect(self.prisoner.location, speed))
@@ -1145,7 +1195,8 @@ class PrisonerBothEnv(gym.Env):
             self.set_seed(seed)
 
         self.set_terrain_paramaters()
-        self.prisoner = Fugitive(self.terrain, [2400, 2400])  # the actual spawning will happen in set_up_world
+        # the actual spawning will happen in set_up_world
+        self.prisoner = Fugitive(self.terrain, self.prisoner_init_pos)
         # Randomize the terrain
 
         self.timesteps = 0
@@ -1153,20 +1204,26 @@ class PrisonerBothEnv(gym.Env):
         self.done = False
 
         self.set_up_world()
-        fugitive_detection_of_parties, parties_detection_of_fugitive = self._determine_detection(0.0)
+
+        # initial speed is 0
+        fugitive_detection_of_parties, parties_detection_of_fugitive = self._determine_detection_reset(speed=0.0)
 
         self.prisoner_location_history = [self.prisoner.location.copy()]
+
         self._fugitive_observation = self._construct_fugitive_observation([0.0, 0.0], fugitive_detection_of_parties,
-                                                                          self._terrain_embedding)
+                                                                          self._terrain_embedding).astype(np.float32)
         self._prediction_observation = self._construct_prediction_observation([0.0, 0.0], fugitive_detection_of_parties,
-                                                                              self._terrain_embedding)
+                                                                              self._terrain_embedding).astype(
+            np.float32)
         self._ground_truth_observation = self._construct_ground_truth([0.0, 0.0], fugitive_detection_of_parties,
                                                                       parties_detection_of_fugitive,
-                                                                      self._terrain_embedding)
+                                                                      self._terrain_embedding).astype(np.float32)
+        # remove the repeated detections of the fugitive in the blue parties observation space
         parties_detection_of_fugitive = transform_blue_detection_of_fugitive(parties_detection_of_fugitive)
         self._blue_observation = self._construct_blue_observation(parties_detection_of_fugitive,
                                                                   self._terrain_embedding,
-                                                                  self.include_start_location_blue_obs)
+                                                                  self.include_start_location_blue_obs).astype(
+            np.float32)
 
         assert self._blue_observation.shape == self.blue_observation_space.shape, "Wrong observation shape %s, %s" % (
             self._blue_observation.shape, self.blue_observation_space.shape)
@@ -1177,17 +1234,14 @@ class PrisonerBothEnv(gym.Env):
         assert self._prediction_observation.shape == self.prediction_observation_space.shape, "Wrong observation shape %s, %s" % (
             self._fugitive_observation.shape, self.fugitive_observation_space.shape)
 
-        # # construct observation
-        # if self.observation_type == ObservationType.Fugitive:
-        #     return self._fugitive_observation
-        # elif self.observation_type == ObservationType.GroundTruth:
-        #     return self._ground_truth_observation
-        # elif self.observation_type == ObservationType.Blue:
-        #     return self._blue_observation
-        # elif self.observation_type == ObservationType.Prediction:
-        #     return self._prediction_observation
-        # else:
-        #     raise ValueError("self.observation_type incorrect")
+        assert self._blue_observation.dtype == self.blue_observation_space.dtype, "Wrong observation dtype %s, %s" % (
+            self._blue_observation.dtype, self.blue_observation_space.dtype)
+        assert self._ground_truth_observation.dtype == self.gt_observation_space.dtype, "Wrong observation dtype %s, %s" % (
+            self._ground_truth_observation.dtype, self.gt_observation_space.dtype)
+        assert self._fugitive_observation.dtype == self.fugitive_observation_space.dtype, "Wrong observation dtype %s, %s" % (
+            self._fugitive_observation.dtype, self.fugitive_observation_space.dtype)
+        assert self._prediction_observation.dtype == self.prediction_observation_space.dtype, "Wrong observation dtype %s, %s" % (
+            self._fugitive_observation.dtype, self.fugitive_observation_space.dtype)
 
         return self._fugitive_observation
 
@@ -1214,6 +1268,21 @@ class PrisonerBothEnv(gym.Env):
         """
         return self._cached_terrain_image
 
+    def render(self, mode, show=True, fast=False, scale=3, show_delta=False):
+        """
+        Render the environment.
+        :param mode: required by `gym.Env` but we ignore it
+        :param show: whether to show the rendered image
+        :param fast: whether to use the fast version for render. The fast version takes less time to render but the render quality is lower.
+        :param scale: scale for fast render
+        :param show_delta: is a bool whether or not to display the square around the fugitive
+        :return: opencv img object
+        """
+        if fast:
+            return self.fast_render_canvas(show, scale, predicted_prisoner_location=None, show_delta=show_delta)
+        else:
+            return self.slow_render_canvas(show)
+
     def fast_render_canvas(self, show=True, scale=3, predicted_prisoner_location=None, show_delta=False):
         """
         We allow the predicted prisoner location to be passed in which renders a predicted prisoner location
@@ -1232,7 +1301,7 @@ class PrisonerBothEnv(gym.Env):
             radius = int(radius)
             color = (0, 0, 1)  # red detection circle
             location = (int(location[0]), self.dim_y - int(location[1]))
-            cv2.circle(self.canvas, location, radius, color, 2)
+            cv2.circle(self.canvas, location, radius, color, 4)
 
         def draw_image_on_canvas_cv(image, location, asset_size):
 
@@ -1269,9 +1338,6 @@ class PrisonerBothEnv(gym.Env):
             predicted_prisoner_location[1] = self.dim_y - predicted_prisoner_location[1]
             cv2.circle(self.canvas, predicted_prisoner_location, 20, (0, 0, 1), -1)
 
-        # towns
-        for town in self.town_list:
-            draw_image_on_canvas_cv(self.town_pic_cv, town.location, self.default_asset_size)
         # search parties
         for search_party in self.search_parties_list:
             draw_image_on_canvas_cv(self.search_party_pic_cv, search_party.location, self.default_asset_size)
@@ -1294,8 +1360,8 @@ class PrisonerBothEnv(gym.Env):
 
         if show_delta:
             # Added by Manisha (Check first before pushing changes) delta = 0.05 = 121.4 on the map
-            x1, y1 = self.prisoner.location[0] - 121, 2428 - self.prisoner.location[1] + 121
-            x2, y2 = self.prisoner.location[0] + 121, 2428 - self.prisoner.location[1] - 121
+            x1, y1 = self.prisoner.location[0] - 121, self.dim_x - self.prisoner.location[1] + 121
+            x2, y2 = self.prisoner.location[0] + 121, self.dim_y - self.prisoner.location[1] - 121
             cv2.rectangle(self.canvas, (x1, y1), (x2, y2), (0, 0, 1), 2)
 
         # hideouts
@@ -1321,24 +1387,9 @@ class PrisonerBothEnv(gym.Env):
         self.canvas = cv2.resize(self.canvas, (x // scale, y // scale))
         # print(np.max(self.canvas))
         if show:
-            cv2.imshow("test", self.canvas)
+            cv2.imshow("test.txt", self.canvas)
             cv2.waitKey(1)
         return (self.canvas * 255).astype('uint8')
-
-    def render(self, mode, show=True, fast=False, scale=3, show_delta=False):
-        """
-        Render the environment.
-        :param mode: required by `gym.Env` but we ignore it
-        :param show: whether to show the rendered image
-        :param fast: whether to use the fast version for render. The fast version takes less time to render but the render quality is lower.
-        :param scale: scale for fast render
-        :param show_delta: is a bool whether or not to display the square around the fugitive
-        :return: opencv img object
-        """
-        if fast:
-            return self.fast_render_canvas(show, scale, show_delta=show_delta)
-        else:
-            return self.slow_render_canvas(show)
 
     def slow_render_canvas(self, show=True):
         """
@@ -1392,9 +1443,6 @@ class PrisonerBothEnv(gym.Env):
         else:
             ax.imshow(self.prisoner_pic, extent=calculate_appropriate_image_extent(self.prisoner.location, radius=50))
 
-        # towns
-        for town in self.town_list:
-            ax.imshow(self.town_pic, extent=calculate_appropriate_image_extent(town.location, radius=30))
         # search parties
         for search_party in self.search_parties_list:
             ax.imshow(self.search_party_pic, extent=calculate_appropriate_image_extent(search_party.location,
@@ -1423,7 +1471,7 @@ class PrisonerBothEnv(gym.Env):
                                                                                              radius=camera.detection_range))
         # finalize
         ax.axis('scaled')
-        plt.savefig("simulator/temp.png")
+        plt.savefig("temp.png")
         # convert canvas to image
         img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
         img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
@@ -1440,182 +1488,11 @@ class PrisonerBothEnv(gym.Env):
     def get_prisoner_location(self):
         return self.prisoner.location
 
-    def generate_policy_heatmap(self, current_state, policy, num_timesteps=2500, num_rollouts=20, end=False):
-        """
-        Generates the heatmap displaying probabilities of ending up in certain cells
-        :param current_state: current location of prisoner, current state of world
-        :param policy: must input state, output action
-        :param num_timesteps: how far in time ahead, remember time is in 15 minute intervals.
-        """
-
-        # Create 2D matrix
-        display_matrix = np.zeros((self.dim_x + 1, self.dim_y + 1))
-
-        for num_traj in tqdm(range(num_rollouts), desc="generating_heatmap"):
-            observation = self.reset()
-            for j in range(num_timesteps):
-                if policy == 'rand':
-                    action = self.action_space.sample()
-                else:
-                    action = policy.predict(observation, deterministic=False)[0]
-                    # action = policy(observation)
-                    # theta = policy([observation])
-                    # action = np.array([7.5, theta[0]], dtype=np.float32)
-                observation, reward, done, _ = self.step(action)
-                # update count
-                if not end:
-                    display_matrix[self.prisoner.location[0], self.dim_y - self.prisoner.location[1]] += 4
-                if done:
-                    if end:
-                        display_matrix[self.prisoner.location[0], self.dim_y - self.prisoner.location[1]] += 4
-                    break
-            if end:
-                display_matrix[self.prisoner.location[0], self.dim_y - self.prisoner.location[1]] += 4
-                # self.render('human', show=True)
-        fig, ax = plt.subplots()
-        display_matrix = np.transpose(display_matrix)
-        from scipy.ndimage import gaussian_filter
-        # smooth the matrix
-        smoothed_matrix = gaussian_filter(display_matrix, sigma=50)
-        # Set 0s to None as they will be ignored when plotting
-        # smoothed_matrix[smoothed_matrix == 0] = None
-        display_matrix[display_matrix == 0] = None
-        # Plot the data
-        fig, ax1 = plt.subplots(nrows=1, ncols=1,
-                                sharex=False, sharey=True,
-                                figsize=(5, 5))
-        # ax1.matshow(display_matrix, cmap='hot')
-        # ax1.set_title("Original matrix")
-        im = ax1.matshow(smoothed_matrix)
-        num_hours = str((num_timesteps / 60).__round__(2))
-
-        ax1.set_title("Heatmap at Time t=" + num_hours + ' hours')
-        from mpl_toolkits.axes_grid1 import make_axes_locatable
-        divider = make_axes_locatable(ax1)
-        cax = divider.append_axes("right", size="5%", pad=0.05)
-        cbar = fig.colorbar(im, cax=cax)
-        cbar.set_ticks([])
-        plt.tight_layout()
-        plt.gca().invert_xaxis()
-        plt.gca().invert_yaxis()
-        cbar.ax.invert_yaxis()
-        plt.show()
-        # fig, ax1 = plt.subplots(nrows=1, ncols=1,
-        #                                sharex=False, sharey=True,
-        #                                figsize=(5, 5))
-        # plt.imshow(smoothed_matrix)
-        # # plt.set_title("Heatmap at Time t="+ str(num_timesteps) + ' minutes')
-        # plt.colorbar()
-        # plt.tight_layout()
-        # plt.show()
-
-        print("saving heatmap")
-        plt.savefig("simulator/temp.png")
-
-        # im = ax.imshow(display_matrix, cmap="hot", origin="lower", vmin=0, vmax=np.max(display_matrix), interpolation='None')
-        # # colorbar
-        # divider = make_axes_locatable(ax)
-        # cax = divider.append_axes("right", size="5%", pad=0.1)
-        # cbar = fig.colorbar(im, cax=cax)
-        # cbar.ax.get_yaxis().labelpad = 15
-        # cbar.set_label('Count', rotation=270)
-        #
-        # plt.grid()
-        # plt.show()
-
-
-# class PrisonerGoalEnv(PrisonerRedEnv):
-#     """
-#     PrisonerEnv with a goal coordinate appended to its observations
-#     """
-
-#     def __init__(self,
-#                  goal_mode=None,
-#                  shape_reward_scale=0.,
-#                  **kwargs):
-#         """
-#         :param goal_mode: specifies how to treat the goal signal. Can be:
-#             None, 'fixed': goal is initialized to 0, 0 and never changed; can be moved manually
-#             'single': a single hideout goal is chosen at environment reset
-#         :param shape_reward_scale: scale of an extra reward component to encourage exploration towards the goal
-#             The value of this parameter is the reward when the agent and goal are on opposite corners.
-#             Interpolates linearly to zero.
-#         """
-#         # Future: replace shape_reward_scale with some more sophisticated input if we emply multiple kinds of reward shaping
-#         super().__init__(observation_step_type="Fugitive", **kwargs)
-#         self.goal_mode = goal_mode
-#         self.goal = np.array([0., 0.])
-#         self.shape_reward_scale = shape_reward_scale
-#         self.obs_names.add_name('goal', 2)
-
-#         # append two slots to the observation space
-#         o = self.observation_space
-#         h, l, d = o.high.tolist(), o.low.tolist(), o.dtype
-#         h.extend([1., 1.])
-#         l.extend([0., 0.])
-#         h, l = np.array(h), np.array(l)
-#         self.observation_space = gym.spaces.Box(high=h, low=l, dtype=d)
-
-#     def reset(self):
-#         sub_obs = super().reset()
-#         obs = np.zeros(self.observation_space.shape)
-#         obs[:-2] = sub_obs
-#         if self.goal_mode == 'single':
-#             hideout_id = np.random.randint(len(self.hideout_list))
-#             self.goal = self.hideout_list[hideout_id].location
-#         elif self.goal_mode == 'switch':
-#             self.timer = np.random.randint(500,1500)
-#             hideout_id = np.random.randint(len(self.hideout_list))
-#             self.goal = self.hideout_list[hideout_id].location
-#         obs[-2:] = self.cell_to_obs(self.goal)
-#         return obs
-
-#     def step(self, action):
-#         if self.goal_mode == 'switch':
-#             if ((self.timesteps % self.timer) == 0) and ((self.max_timesteps-self.timesteps)>self.timer):
-#                 hideout_id = np.random.randint(len(self.hideout_list))
-#                 self.goal = self.hideout_list[hideout_id].location
-#         sub_obs, r, d, i = super().step(action)
-#         # sparse goal reward
-#         # r = -5e-4
-#         # hideout = self.near_hideout()
-#         # if hideout is not None:
-#         #     if np.all(hideout.location == self.goal):
-#         #         r = 2.0
-
-#         obs = np.zeros(self.observation_space.shape)
-#         obs[:-2] = sub_obs
-#         obs[-2:] = self.cell_to_obs(self.goal)
-#         if self.shape_reward_scale > 0:
-#             r -= self.shape_reward_scale * self.dist_to_goal() / \
-#                  np.linalg.norm(np.array([self.dim_x, self.dim_y]))
-#         return obs, r, d, i
-
-#     def set_hideout_goal(self, index):
-#         """
-#         set the current goal to the location of one of the hideouts by index
-#         """
-#         self.goal = np.array(self.hideout_list[index].location)
-
-#     def vector_to_goal(self, obs=None):
-#         if obs is None:
-#             goal = np.array(self.goal)
-#             prisloc = np.array(self.prisoner.location)
-#         else:
-#             obs = self.obs_names(obs) # old obs accessible as obs.array
-#             prisloc = self.obs_to_cell(obs['prisoner_loc'])
-#             goal = self.obs_to_cell(obs['goal'])
-#         return goal - prisloc
-
-#     def dist_to_goal(self, obs=None):
-#         return np.linalg.norm(self.vector_to_goal(obs))
-
-#     def angle_to_goal(self, obs=None):
-#         vector = self.vector_to_goal(obs)
-#         return math.atan2(vector[1], vector[0])
+    @property
+    def blue_observation(self):
+        return self._blue_observation
 
 
 if __name__ == "__main__":
     np.random.seed(20)
     # p = PrisonerEnv()
-    # p.generate_policy_heatmap(p.reset(), policy='rand', end=True)

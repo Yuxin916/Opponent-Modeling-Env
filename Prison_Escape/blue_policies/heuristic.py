@@ -2,6 +2,12 @@ import matplotlib.pyplot as plt
 import time
 import numpy as np
 
+raw_env_path = "/home/tsaisplus/MuRPE_base/Opponent-Modeling-Env/Prison_Escape/environment/configs/mytest.yaml"
+import yaml
+with open(raw_env_path, 'r') as stream:
+    data = yaml.safe_load(stream)
+DIM_X = data['terrain_x']
+DIM_Y = data['terrain_y']
 
 class BlueHeuristic:
     def __init__(self, env, debug=False):
@@ -30,7 +36,7 @@ class BlueHeuristic:
         if np.array_equiv(new_detection, np.array([-1, -1])):
             new_detection = None
         else:
-            new_detection = (new_detection*2428).tolist()
+            new_detection = (new_detection*DIM_X).tolist()
         return self.step(new_detection)
 
     def step(self, new_detection):
@@ -91,8 +97,8 @@ class BlueHeuristic:
 
     def debug_plot_plans(self):
         self.fig, self.ax = plt.subplots()
-        self.ax.set_xlim([0, 2428])
-        self.ax.set_ylim([0, 2428])
+        self.ax.set_xlim([0, DIM_X])
+        self.ax.set_ylim([0, DIM_Y])
         self.ax.set_aspect('equal')
 
         all_blue = self.search_parties + self.helicopters if self.env.is_helicopter_operating() else self.search_parties

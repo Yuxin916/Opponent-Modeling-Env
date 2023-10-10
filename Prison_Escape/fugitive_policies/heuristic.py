@@ -4,9 +4,16 @@ import random
 from Prison_Escape.environment import search_party
 from .utils import clip_theta, distance, pick_closer_theta
 
-DIM_X = 2428
-DIM_Y = 2428
+raw_env_path = "Prison_Escape/environment/configs/mytest.yaml"
+import yaml
+with open(raw_env_path, 'r') as stream:
+    data = yaml.safe_load(stream)
+DIM_X = data['terrain_x']
+DIM_Y = data['terrain_y']
 
+"""
+heuristic_type == 'Normal'
+"""
 MOUNTAIN_OUTER_RANGE = 150
 MOUNTAIN_INNER_RANGE = 140
 

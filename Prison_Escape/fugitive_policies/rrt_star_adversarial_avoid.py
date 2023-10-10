@@ -1,18 +1,23 @@
 import numpy as np
 
-from .utils import clip_theta, distance, c_str
+from .utils import distance
 import matplotlib.pyplot as plt
 import time
-from Prison_Escape.fugitive_policies.custom_queue import QueueFIFO
 from Prison_Escape.fugitive_policies.rrt_star_adversarial_heuristic import RRTStarAdversarial, Plotter
 
-DIM_X = 2428
-DIM_Y = 2428
+raw_env_path = "/home/tsaisplus/MuRPE_base/Opponent-Modeling-Env/Prison_Escape/environment/configs/mytest.yaml"
+import yaml
+with open(raw_env_path, 'r') as stream:
+    data = yaml.safe_load(stream)
+DIM_X = data['terrain_x']
+DIM_Y = data['terrain_y']
 
-# MOUNTAIN_OUTER_RANGE = 150
+MOUNTAIN_OUTER_RANGE = 150
 MOUNTAIN_INNER_RANGE = 155
-import math
-import random
+
+"""
+else
+"""
 
 class RRTStarAdversarialAvoid(RRTStarAdversarial):
     def __init__(self, env,             
