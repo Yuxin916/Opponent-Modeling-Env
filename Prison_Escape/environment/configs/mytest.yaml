@@ -29,8 +29,8 @@ camera_net_path: null # FIXED. the path to the camera net file
 ######Pursuer Team##############
 num_search_parties: 3  # FIXED number of ground catcher
 num_helicopters: 1  # FIXED number of air sensor
-search_party_speed: 7.5  # speed of ground catcher
-helicopter_speed: 127  # speed of air sensor
+search_party_speed: 20  # speed of ground catcher
+helicopter_speed: 20  # speed of air sensor
 helicopter_battery_life: 4320 # FIXED. No battery die. how many minutes the helicopter can last in the game
 helicopter_recharge_time: 40 # how many minutes the helicopter need to recharge itself
 random_init_positions: False # FIXED. whether to use random initial positions or not
@@ -92,6 +92,6 @@ unknown_hideout_locations: # to pursuers teams. FIXED
 #  - 602, 372
 #  - 100, 100
 #  - 279, 477
-  - 150, 500
+  - 150, 400
 
 

@@ -28,7 +28,6 @@ class Fugitive(DetectionObject):
             self.detection_object_type_coefficient = 0.5
             return DetectionObject.detect(self, location_object, 8)
             # return DetectionObject.detect(self, location_object, object_instance.speed)
-            #TODO: shouldn't this be read from yaml file?
         elif isinstance(object_instance, Prison_Escape.environment.search_party.SearchParty):
             self.detection_object_type_coefficient = 0.75
             # return DetectionObject.detect(self, location_object, object_instance.speed)

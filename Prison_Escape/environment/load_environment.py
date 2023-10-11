@@ -1,6 +1,5 @@
 import os
 import sys
-
 sys.path.append(os.getcwd())
 from Prison_Escape.environment import PrisonerBothEnv
 

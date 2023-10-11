@@ -116,6 +116,7 @@ def create_observation_space_ground_truth(num_known_cameras, num_unknown_cameras
         observation_space = spaces.Box(observation_low, observation_high)
         return observation_space, obs_names
 
+# evader状态空间
 def create_observation_space_fugitive(num_known_cameras, num_known_hideouts, num_unknown_hideouts, num_helicopters, num_search_parties, terrain_size=0):
     """ Create observation space for fugitive 
     :param num_known_cameras: number of known cameras
@@ -222,6 +223,7 @@ def create_observation_space_prediction(num_known_cameras, num_known_hideouts, n
     observation_space = spaces.Box(observation_low, observation_high)
     return observation_space, obs_names
 
+# pursuer状态空间
 def create_observation_space_blue_team(num_known_cameras, num_unknown_cameras, num_known_hideouts, num_helicopters, num_search_parties, terrain_size=0, include_start_location_blue_obs=False):
         """ Create observation space for blue team 
         :param num_known_cameras: number of known cameras
@@ -308,6 +310,7 @@ def create_observation_space_blue_team(num_known_cameras, num_unknown_cameras, n
         # print("Pursuer Team Observation Space TYPE: ", observation_space.dtype)
         return observation_space, obs_names
 
+# pursuer动作空间
 def create_action_space_blue_team(num_helicopters, num_search_parties, search_party_speed, helicopter_speed):
     search_party_spaces = [
         (f'search_party_{id_}', spaces.Box(
@@ -327,6 +330,21 @@ def create_action_space_blue_team(num_helicopters, num_search_parties, search_pa
     return spaces.Box(low=np.array([-np.pi, -np.pi, 0]), high=np.array([np.pi, np.pi, helicopter_speed]))
 
     # return spaces.Dict(dict(search_party_spaces + helicopter_spaces))
+
+def create_action_space_blue_team_v2(num_helicopters, num_search_parties, search_party_step, helicopter_step):
+    #TODO: wrong here. Also you need to do standardization from DM output to real waypoint
+
+    # create Discrete action space for search parties
+    search_party_spaces = [
+        (f'search_party_{id_}', spaces.Discrete(search_party_step)) for id_ in range(num_search_parties)
+    ]
+    # create Discrete action space for helicopters
+    helicopter_spaces = [
+        (f'helicopter_{id_}', spaces.Discrete(helicopter_step)) for id_ in range(num_helicopters)
+    ]
+    # combine the two action spaces
+    return spaces.Dict(dict(search_party_spaces + helicopter_spaces))
+
 
 def transform_blue_detection_of_fugitive(parties_detection_of_fugitive):
     """ This is used to remove the repeated detections of the fugitive in the blue parties observation space.

@@ -101,6 +101,9 @@ class MovingObject(AbstractObject):
         return direction
 
     def get_action_according_to_plan(self):
+        """
+        blue team heuristic
+        """
         # action is (x, y, velocity)
         current_movement = self.planned_path[0]
         action = None
@@ -308,6 +311,9 @@ class MovingObject(AbstractObject):
 
     def path_v3(self, direction, speed, mountain_inner_range=140, mountain_outer_range=160):
         """
+        输入：方向向量，速度
+        输出：是否成功移动
+
         Determine one step that the helicopter or search party will take to reach its destination
 
         Args:
@@ -319,28 +325,29 @@ class MovingObject(AbstractObject):
         Returns:
             _type_: _description_
         """
-        # old_location = self.location.copy()
-        # new_location = (np.array([direction[0], direction[1]]) * speed).astype(np.int) + self.location
 
-        # if distance_movement <= speed:
-        #     # If the travel speed would overshoot traveling to the intended
-        #     # destination, just place helicopter on the destination
-        #     new_location = destination
-        # else:
-        speed = min(speed, self.speed) 
+        # clip速度
+        speed = min(speed, self.speed)
+        # 计算移动距离
         step = direction * speed
-        new_location = np.round([self.location[0] + step[0], self.location[1] + step[1]]).astype(np.int)
 
+        # 计算新位置
+        new_location = np.round([self.location[0] + step[0], self.location[1] + step[1]]).astype(np.int)
+        # 计算新方向
         desired_heading = np.arctan2(direction[1], direction[0])
 
-        mountain_dist, mountain_in_range = self.in_range_of_mountain(new_location, mountain_outer_range)
+        # 暂时comment掉对mountain的处理
+        # mountain_dist, mountain_in_range = self.in_range_of_mountain(new_location, mountain_outer_range)
+        mountain_in_range = False
+        mountain_dist = None
+
         if mountain_in_range:
             # if direction_mode:
             #     current_location = np.array(new_location.copy())
             #     every_step = (direction * speed).astype(np.int)
             #     while self.in_range_of_mountain(current_location, mountain_outer_range)[1]:
             #         current_location += every_step
-                
+
             #     if self.debug:
             #         print("Adding a location command due to mountain interference of direction command")
             #     self.planned_path.insert(0, ('l', int(current_location[0]), int(current_location[1])))
@@ -364,13 +371,46 @@ class MovingObject(AbstractObject):
             direction = np.array([np.cos(theta), np.sin(theta)])
             step = direction * speed
             self.location = [self.location[0] + int(np.round(step[0])), self.location[1] + int(np.round(step[1]))]
+            raise NotImplementedError("path_v3. Should not exist mountain")
         else:
+            # 更新新位置
             self.location = new_location
 
+        # 判断是否出界
         if self.terrain.violate_edge_constraints(self.location[0], self.location[1], 1, 1):
             self.location = np.clip(self.location, [0, 0], [self.terrain.dim_x - 1, self.terrain.dim_y - 1]).astype(np.int)
+
+        # 判断list format是否正确
         if isinstance(self.location, np.ndarray):
             self.location = list(self.location)
+
+        # location应该是int
+        assert np.issubdtype(type(self.location[0]), np.integer)
+        assert np.issubdtype(type(self.location[1]), np.integer)
+        return True
+
+    def path_v4(self, waypoint):
+        """
+        输入：waypoint, ndarray(2,), dtype=int
+        输出：是否成功移动
+        """
+        old_location = self.location.copy()
+
+        # 计算新位置
+        new_location = np.round([old_location[0] + waypoint[0], old_location[1] + waypoint[1]]).astype(np.int)
+
+        # 更新新位置
+        self.location = new_location
+
+        # 判断新坐标是否出界
+        if self.terrain.violate_edge_constraints(self.location[0], self.location[1], 1, 1):
+            self.location = np.clip(self.location, [0, 0], [self.terrain.dim_x - 1, self.terrain.dim_y - 1]).astype(np.int)
+
+        # 判断list format是否正确
+        if isinstance(self.location, np.ndarray):
+            self.location = list(self.location)
+
+        # location应该是int
         assert np.issubdtype(type(self.location[0]), np.integer)
         assert np.issubdtype(type(self.location[1]), np.integer)
         return True
@@ -421,6 +461,7 @@ class MovingObject(AbstractObject):
 
     def plan_path_to_intercept(self, speed, direction, current_loc):
         """
+        Blue Heuristic
         Determine the path the helicopter or search party will take to intercept the fugitive
         Note this planning does not account for mountains
             :param speed: the speed of the fugitive calculated

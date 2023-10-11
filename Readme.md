@@ -140,11 +140,14 @@ In my experiment, the config file is `Prison_Escape/environment/configs/mytest.y
 ### TODO
 1. Reduce Dimension of terrain map. Make the 2428 parameter in the config file. [Not needed]
 2. Remove mountain and forest. Only woods. [Done]
-3. Is the position integer? 
-4. detection_range for each object. print them out
-5. How is the velocity x time = position and how did agent arrive to waypoint. How to change to direct position (discrete then)
+3. Is the position integer? [Yes! It is int 64. So we can change to discrete waypoint action space]
+4. detection_range for each object. print them out [Done]
+5. How is the velocity x time = position and how did agent arrive to waypoint. How to change to direct position (discrete then) [Done]
 6. The camera range is not inserted in the environmet. How does the camera know the detection?
-
+7. Integrate into the HARL framework. 
+8. Rewrite the observation space file. Create new create_action_space_blue_team_v2 function 
+9. Create a new policy for blue team. （random generate policy）
+10. Take note about the TODO (12 of them). Staged for now and switch to HRL. 
 
 
 

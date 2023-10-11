@@ -1,5 +1,4 @@
-from Prison_Escape.environment.prisoner_env import PrisonerBothEnv, ObservationType
-from Prison_Escape.blue_policies.heuristic import BlueHeuristic
+from Prison_Escape.environment.prisoner_env import PrisonerBothEnv
 from Prison_Escape.fugitive_policies.rrt_star_adversarial_avoid import RRTStarAdversarialAvoid
 import numpy as np
 import gym
@@ -29,16 +28,18 @@ class PrisonerBlueEnv(gym.Wrapper):
         self.obs_names = self.env.blue_obs_names
 
     def reset(self, seed=None):
-        # print("*"*60)
-        # print(f"RESET Blue-Wrapper ENVIRONMENT")
         self.env.reset(seed)
         if type(self.fugitive_policy) == RRTStarAdversarialAvoid:
             self.fugitive_policy.reset()
+            raise NotImplementedError("RRTStarAdversarialAvoid not test for blue policy, use astar instead")
         return self.env.blue_observation
         
     def step(self, blue_action):
         # get red observation for policy
         red_obs_in = self.env._fugitive_observation
         red_action = self.fugitive_policy.predict(red_obs_in)
+        # red_action: a speed and direction vector for the red agent (not important) -- red_action[0] -- ndarray(2,)
+        # blue_action: a triple of [dx, dy, speed] where dx and dy is the direction vector (a norm of 1) -- blue_action
+        # list of arrays. (N agent), each array is ndarray(3,)
         _, blue_obs, reward, done, i = self.env.step_both(red_action[0], blue_action)
-        return blue_obs, reward, done, i 
+        return blue_obs, reward, done, i

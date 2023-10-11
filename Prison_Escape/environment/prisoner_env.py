@@ -1,5 +1,4 @@
 import copy
-import gc
 import math
 import os
 import random
@@ -11,7 +10,6 @@ import cv2
 import gym
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from PIL import Image
 from gym import spaces
 
@@ -21,17 +19,14 @@ from Prison_Escape.environment.forest_coverage.generate_square_map import genera
 from Prison_Escape.environment.fugitive import Fugitive
 from Prison_Escape.environment.helicopter import Helicopter
 from Prison_Escape.environment.hideout import Hideout
-from Prison_Escape.environment.observation_spaces import create_observation_space_ground_truth, \
+from Prison_Escape.environment.observation_spaces import (create_observation_space_ground_truth, \
     create_observation_space_fugitive, \
     create_observation_space_blue_team, create_observation_space_prediction, \
-    create_action_space_blue_team
-from Prison_Escape.environment.observation_spaces import transform_blue_detection_of_fugitive
+    create_action_space_blue_team, create_action_space_blue_team_v2, \
+    transform_blue_detection_of_fugitive)
 from Prison_Escape.environment.search_party import SearchParty
 from Prison_Escape.environment.terrain import Terrain
 from Prison_Escape.environment.utils import create_camera_net
-
-
-# from blue_policies.blue_heuristic import BlueHeuristic
 
 
 class ObservationType(Enum):
@@ -96,7 +91,6 @@ class PrisonerBothEnv(gym.Env):
         - Detection of [helicopters, helicopter dropped cameras, search parties]
 
     Action space (evader)
-        # TODO: change this to discrete action space
         - 2 dimensional: speed [1,15] x direction [-pi, pi]
         - 2 dimensional: speed [1,15] x direction [-pi, pi]
 
@@ -105,6 +99,12 @@ class PrisonerBothEnv(gym.Env):
         - Locations of [cameras, helicopters, helicopter dropped cameras, search parties, known hideouts]
         - Detection of the fugitive from [cameras, helicopters, helicopter dropped cameras, search parties]
         - Terrain
+
+    Action space (pursuer team)
+        - 2 dimensional discrete:
+            [1, 20] x [1, 20] for  search party
+            [1, 127] x [1, 127] for helicopter
+            #TODO: same for now
 
     Coordinate system:
         - By default, cartesian Coordinate:
@@ -201,7 +201,7 @@ class PrisonerBothEnv(gym.Env):
 
                  reward_scheme=None,
                  stopping_condition=False,
-                 debug=True,
+                 debug=False,
 
                  ):
         """
@@ -250,7 +250,8 @@ class PrisonerBothEnv(gym.Env):
             'GroundTruth': Returns information of all agents in the environment
             'Prediction': Returns fugitive observations but without the unknown hideouts
         :observation_terrain_feature: boolean of whether to include the terrain feature in the observation
-        :stopping_condition: boolean of whether to stop the game when the fugitive produces 0 speed #TODO: when will evader produce zero speed
+        :stopping_condition: boolean of whether to stop the game when the fugitive produces 0 speed
+        #TODO: when will evader produce zero speed
         :step_reset: boolean of whether to reset the game after the episode is over or just wait at the final location no matter what action is given to it
             This is to make the multi-step prediction rollouts to work properly.
             Default is True 
@@ -322,7 +323,6 @@ class PrisonerBothEnv(gym.Env):
         else:
             # Getting terrain from terrain object
             # Assume we are just using a single terrain object
-            # TODO: make this robust when we are switching terrains
             forest_density_list = [terrain.forest_density_array]
             self.terrain_list = [terrain]
             raise NotImplementedError("Terrain should be null and terrain_map should be null")
@@ -402,12 +402,14 @@ class PrisonerBothEnv(gym.Env):
 
         self.red_action_space = spaces.Box(low=np.array([0, -np.pi]), high=np.array([15, np.pi]))  # for evader
 
-        # self.blue_action_space = gym.spaces.Dict(dict(search_party_spaces + helicopter_spaces))
-        self.blue_action_space = create_action_space_blue_team(num_helicopters=num_helicopters,
-                                                               num_search_parties=num_search_parties,
-                                                               search_party_speed=search_party_speed,
-                                                               helicopter_speed=helicopter_speed)
-
+        # self.blue_action_space = create_action_space_blue_team(num_helicopters=num_helicopters,
+        #                                                        num_search_parties=num_search_parties,
+        #                                                        search_party_speed=search_party_speed,
+        #                                                        helicopter_speed=helicopter_speed)
+        self.blue_action_space = create_action_space_blue_team_v2(num_helicopters=num_helicopters,
+                                                                  num_search_parties=num_search_parties,
+                                                                  search_party_step=search_party_speed,
+                                                                  helicopter_step=helicopter_speed)
         # TODO: custom environment with heterogeneous action/observation spaces
         # self.action_space = gym.spaces.Dict({id_: self.envs[id_].action_space for id_ in env_config["policies"]})
 
@@ -495,6 +497,7 @@ class PrisonerBothEnv(gym.Env):
                                                    cv2.IMREAD_UNCHANGED)
 
         self.default_asset_size = 70  # FIXED. How big is the assets image in render
+
         # Store (t,x,y) for last k detections. Only updated if store_last_k_fugitive_detections is True
         self.last_k_fugitive_detections = [[-1, -1, -1], [-1, -1, -1], [-1, -1, -1], [-1, -1, -1],
                                            [-1, -1, -1], [-1, -1, -1], [-1, -1, -1], [-1, -1, -1]]
@@ -657,7 +660,6 @@ class PrisonerBothEnv(gym.Env):
 
         if self.camera_net_bool:
             if self.camera_net_path is None:
-                # TODO: why the dist_x and dist_y are 360?
                 cam_locs = create_camera_net(prisoner_location, dist_x=360, dist_y=360, spacing=30,
                                              include_camera_at_start=self.include_camera_at_start)
                 unknown_camera_locations.extend(cam_locs.tolist())
@@ -809,7 +811,12 @@ class PrisonerBothEnv(gym.Env):
 
         :return: observation, reward, done (boolean), info (dict)
         """
-        # print("Before step", self.search_parties_list[0].location)
+        if self.DEBUG:
+            print("In step_both")
+            for i in range(len(self.search_parties_list)):
+                print(f"{i + 1}_SearchParty speed: ", self.search_parties_list[i].speed)
+                print(f"{i + 1}_SearchParty detection range: ", self.search_parties_list[i].detection_range)
+                print(f"{i + 1}_SearchParty location: ", self.search_parties_list[i].location)
         if self.done:
             if self.step_reset:
                 raise RuntimeError("Episode is done")
@@ -817,13 +824,17 @@ class PrisonerBothEnv(gym.Env):
                 observation = np.zeros(self.observation_space.shape)
                 total_reward = 0
                 return observation, total_reward, self.done, {}
-        assert self.red_action_space.contains(
-            red_action), f"Actions should be in the action space, but got {red_action}"
 
+        assert self.red_action_space.contains(
+            red_action), f"Red Actions should be in the action space, but got {red_action}"
+
+        # 时间步+1
         self.timesteps += 1
+
+        # evader之前的位置
         old_prisoner_location = self.prisoner.location.copy()
 
-        # move red agent
+        # 移动evader
         direction = np.array([np.cos(red_action[1]), np.sin(red_action[1])])
 
         fugitive_speed = red_action[0]
@@ -839,41 +850,81 @@ class PrisonerBothEnv(gym.Env):
         if self.terrain.world_representation[0, new_location[0], new_location[1]] == 1:
             new_location = np.array(old_prisoner_location)
 
-        # finish moving the prisoner
         self.prisoner.location = new_location.tolist()
         self.prisoner_location_history.append(self.prisoner.location.copy())
+        if self.DEBUG:
+            print("-----------------")
+            print("finish moving the prisoner")
+            print("Prisoner detetion range: ", self.prisoner.detection_range)
+            print("Prisoner location: ", self.prisoner.location)
+            print("Prisoner speed: ", self.current_prisoner_speed)
 
-        # move blue agents
-        for i, search_party in enumerate(self.search_parties_list):
-            # getattr(search_party, command)(*args, **kwargs)
-            direction = blue_action[i][0:2]
-            speed = blue_action[i][2]
-            search_party.path_v3(direction=direction, speed=speed)
-        if self.is_helicopter_operating():
-            for j, helicopter in enumerate(self.helicopters_list):
-                # getattr(helicopter, command)(*args, **kwargs)
-                direction = blue_action[i + j + 1][0:2]
-                speed = blue_action[i + j + 1][2]
-                helicopter.path_v3(direction=direction, speed=speed)
+        # 如何修改action space
+        original_velocity_version = False
 
-        if self.stopping_condition:
-            # add stop condition if our speed is between 0 and 1
-            if (0 <= red_action[0] < 1):
-                self.done = True
-                if self.DEBUG:
-                    print("Stopping condition - evader speed is between 0 and 1")
+        if original_velocity_version:
+            # 移动pursuers
+            # UGVs. 提取速度和方向
+            for i, search_party in enumerate(self.search_parties_list):
+                # getattr(search_party, command)(*args, **kwargs)
+                direction = blue_action[i][0:2]
+                speed = blue_action[i][2]
+                #
+                search_party.path_v3(direction=direction, speed=speed)
+
+            if self.is_helicopter_operating():
+                for j, helicopter in enumerate(self.helicopters_list):
+                    # getattr(helicopter, command)(*args, **kwargs)
+                    direction = blue_action[i + j + 1][0:2]
+                    speed = blue_action[i + j + 1][2]
+                    helicopter.path_v3(direction=direction, speed=speed)
         else:
-            # stop if we are near hideout
-            if self.near_hideout():
-                self.done = True
-                if self.DEBUG:
-                    print("Stopping condition - evader is near hideout")
+            # 移动pursuers
+            # UGVs. 提取waypoint
+            for i, search_party in enumerate(self.search_parties_list):
+                waypoint = blue_action[i]
+                search_party.path_v4(waypoint=waypoint)
 
-        # game ends?
-        if self.timesteps >= self.max_timesteps:
+            if self.is_helicopter_operating():
+                for j, helicopter in enumerate(self.helicopters_list):
+                    waypoint = blue_action[i + j + 1]
+                    helicopter.path_v4(waypoint=waypoint)
+
+        # if self.stopping_condition:
+        #     # 什么时候evader速度会小于1呢？comment
+        #     if (0 <= red_action[0] < 1):
+        #         self.done = True
+        #         if self.DEBUG:
+        #             print("Stopping condition - evader speed is between 0 and 1")
+
+        # 一系列判断是否结束的条件
+        # stop. evader到达终点
+        if self.near_hideout():
+            self.done = True
+            if self.DEBUG:
+                print("Stopping condition - evader is near hideout")
+
+        # stop. evader被包围
+        # elif self.surrounded_by_pursuers():
+        #     self.done = True
+        #     if self.DEBUG:
+        #         print("Stopping condition - evader is surrounded by pursuers")
+
+        # stop. evader速度小于1
+        elif (0 <= red_action[0] < 1):
+            # TODO： i dont know when
+            self.done = True
+            if self.DEBUG:
+                print("Stopping condition - evader speed is between 0 and 1")
+
+        # stop. 时间步用完
+        elif self.timesteps >= self.max_timesteps:
             self.done = True
             if self.DEBUG:
                 print("Stopping condition - max timesteps reached")
+
+        else:
+            assert self.done == False, "Stopping condition not met, but done is True"
 
         # Construct observation from these
         parties_detection_of_fugitive = self._determine_blue_detection_of_red(fugitive_speed)
@@ -919,14 +970,17 @@ class PrisonerBothEnv(gym.Env):
 
     def is_helicopter_operating(self):
         """
+        判断UAV是否还在工作
         Determines whether the helicopter is operating right now
         :return: Boolean indicating whether the helicopter is operating
         """
-        timestep = self.timesteps % (self.helicopter_recharge_time + self.helicopter_battery_life)
-        if timestep < self.helicopter_battery_life:
-            return True
-        else:
-            return False
+        # # comment - UAV会一直工作
+        # timestep = self.timesteps % (self.helicopter_recharge_time + self.helicopter_battery_life)
+        # if timestep < self.helicopter_battery_life:
+        #     return True
+        # else:
+        #     return False
+        return True
 
     @property
     def spawn_point(self):
@@ -968,6 +1022,19 @@ class PrisonerBothEnv(gym.Env):
                 # print(f"Reached a hideout that is {hideout.known_to_good_guys} known to good guys")
                 return hideout
         return None
+
+    def surrounded_by_pursuers(self):
+        # TODO: not finished
+        """
+        判断evader是否被包围
+        Determines whether the fugitive is surrounded by pursuers
+        :return: Boolean indicating whether the fugitive is surrounded by pursuers
+        """
+        for search_party in self.search_parties_list:
+            if ((np.asarray(search_party.location) - np.asarray(
+                    self.prisoner.location)) ** 2).sum() ** .5 > self.search_party_detection_range:
+                return False
+        return True
 
     def _determine_red_detection_of_blue(self, speed):
         fugitive_detection_of_parties = []
@@ -1268,7 +1335,7 @@ class PrisonerBothEnv(gym.Env):
         """
         return self._cached_terrain_image
 
-    def render(self, mode, show=True, fast=False, scale=3, show_delta=False):
+    def render(self, mode, show=True, fast=False, scale=3, show_delta=False, show_grid=False):
         """
         Render the environment.
         :param mode: required by `gym.Env` but we ignore it
@@ -1279,11 +1346,14 @@ class PrisonerBothEnv(gym.Env):
         :return: opencv img object
         """
         if fast:
-            return self.fast_render_canvas(show, scale, predicted_prisoner_location=None, show_delta=show_delta)
+            return self.fast_render_canvas(show, scale, predicted_prisoner_location=None,
+                                           show_delta=show_delta, show_grid=show_grid)
         else:
-            return self.slow_render_canvas(show)
+            # return self.slow_render_canvas(show)
+            raise NotImplementedError("Slow render is not tested")
 
-    def fast_render_canvas(self, show=True, scale=3, predicted_prisoner_location=None, show_delta=False):
+    def fast_render_canvas(self, show=True, scale=3, predicted_prisoner_location=None, show_delta=False,
+                           show_grid=False):
         """
         We allow the predicted prisoner location to be passed in which renders a predicted prisoner location
         show_delta: is a bool whether or not to display the square around the fugitive
@@ -1302,6 +1372,13 @@ class PrisonerBothEnv(gym.Env):
             color = (0, 0, 1)  # red detection circle
             location = (int(location[0]), self.dim_y - int(location[1]))
             cv2.circle(self.canvas, location, radius, color, 4)
+
+        def draw_grid_on_canvas_cv(x, y, scale=3):
+            # draw grid in black color
+            for i in range(0, x, 100 // scale):
+                cv2.line(self.canvas, (i, 0), (i, self.dim_y), (0, 0, 0), 1)
+            for i in range(0, y, 100 // scale):
+                cv2.line(self.canvas, (0, i), (self.dim_x, i), (0, 0, 0), 1)
 
         def draw_image_on_canvas_cv(image, location, asset_size):
 
@@ -1345,6 +1422,11 @@ class PrisonerBothEnv(gym.Env):
                                      search_party.base_100_pod_distance(self.current_prisoner_speed))
             draw_radius_of_detection(search_party.location,
                                      search_party.base_100_pod_distance(self.current_prisoner_speed) * 3)
+            # draw_radius_of_detection(search_party.location,
+            #                          search_party.detection_range // 3)
+            # draw_radius_of_detection(search_party.location,
+            #                          search_party.detection_range)
+            # assert search_party.base_100_pod_distance(self.current_prisoner_speed) * 3 == search_party.detection_range
 
         # helicopters
         if self.is_helicopter_operating():
@@ -1354,6 +1436,11 @@ class PrisonerBothEnv(gym.Env):
                                          helicopter.base_100_pod_distance(self.current_prisoner_speed))
                 draw_radius_of_detection(helicopter.location,
                                          helicopter.base_100_pod_distance(self.current_prisoner_speed) * 3)
+                # draw_radius_of_detection(helicopter.location,
+                #                          helicopter.detection_range // 3)
+                # draw_radius_of_detection(helicopter.location,
+                #                          helicopter.detection_range)
+                # assert helicopter.base_100_pod_distance(self.current_prisoner_speed) * 3 == helicopter.detection_range
         else:
             for helicopter in self.helicopters_list:
                 draw_image_on_canvas_cv(self.helicopter_no_pic_cv, helicopter.location, self.default_asset_size)
@@ -1386,6 +1473,11 @@ class PrisonerBothEnv(gym.Env):
         x, y, _ = self.canvas.shape
         self.canvas = cv2.resize(self.canvas, (x // scale, y // scale))
         # print(np.max(self.canvas))
+
+        x, y, _ = self.canvas.shape
+        if show_grid:
+            draw_grid_on_canvas_cv(x, y, scale)
+
         if show:
             cv2.imshow("test.txt", self.canvas)
             cv2.waitKey(1)
@@ -1471,7 +1563,7 @@ class PrisonerBothEnv(gym.Env):
                                                                                              radius=camera.detection_range))
         # finalize
         ax.axis('scaled')
-        plt.savefig("temp.png")
+        # plt.savefig("temp.png")
         # convert canvas to image
         img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
         img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
